@@ -149,6 +149,11 @@ export function stopTimer(): TimeEntryRecord | null {
   updateTimeEntry(activeLocalId, {
     durationSeconds: currentDurationSeconds(),
     endTime: new Date().toISOString(),
+    // Force one more sync after stopping — while it was running this entry
+    // may already have been marked 'synced' by an earlier cycle (it's kept
+    // re-syncing via end_time IS NULL, not sync_status), so without this the
+    // final duration/endTime update would never get picked up again.
+    syncStatus: 'pending',
   });
   stopHeartbeat();
   stopIdleWatch();

@@ -91,8 +91,15 @@ export function getOpenTimeEntry(): TimeEntryRecord | null {
   return row ? rowToEntry(row) : null;
 }
 
+// Entries never synced (sync_status='pending'), PLUS the currently-open one
+// (end_time IS NULL) even if it was already marked 'synced' by an earlier
+// cycle — a running timer's duration keeps growing via heartbeat, so it
+// needs to keep re-syncing every cycle until it's actually stopped, not
+// just once.
 export function getPendingTimeEntries(): TimeEntryRecord[] {
-  const rows = getDb().prepare(`SELECT * FROM time_entries WHERE sync_status = 'pending'`).all();
+  const rows = getDb()
+    .prepare(`SELECT * FROM time_entries WHERE sync_status = 'pending' OR end_time IS NULL`)
+    .all();
   return rows.map(rowToEntry);
 }
 
