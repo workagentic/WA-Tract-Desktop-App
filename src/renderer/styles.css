@@ -1,0 +1,324 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  /* These are small, chromeless custom windows — a stray browser scrollbar
+     from a few px of overflow looks broken. Content that can genuinely
+     outgrow the window (the task tree) scrolls internally instead (see
+     .task-tree below); the timer bar never needs to scroll at all. */
+  overflow: hidden;
+}
+
+body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+/* The timer bar and task-picker BrowserWindows are created with
+   transparent:true (main.ts) so only their own rounded white panel is
+   visible against the desktop. Without this override, body's opaque dark
+   background above would paint the window's full rectangular bounds,
+   showing up as a solid dark box around the panel. */
+html:has(.widget),
+body:has(.widget) {
+  background: transparent;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.screen {
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  gap: 12px;
+}
+
+.code {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  padding: 16px 28px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  border: 1px solid #d8dde3;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.banner {
+  width: 100%;
+  border: 1px solid #f0d789;
+  background: #fdf6df;
+  color: #7a5c00;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+/* --- Timer bar + task picker: both are frameless, transparent flyout
+   windows anchored just above the tray icon (main.ts's anchorNearTray) —
+   the transparent window lets this rounded white panel float free of any
+   rectangular chrome, same trick the old dark bubble used. --- */
+
+.widget {
+  height: 100vh;
+  width: 100vw;
+  box-sizing: border-box;
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bar-icon {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: #35d07f;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.timer-bar {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #35d07f;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(20, 30, 20, 0.18);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.bar-task-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1b2230;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-task-name:hover {
+  text-decoration: underline;
+}
+
+/* Invisible twin of .bar-task-name used only to measure the full,
+   untruncated title width (see TimerWidget.tsx) — never actually seen. */
+.bar-task-name-measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.bar-time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #4b5563;
+  flex-shrink: 0;
+}
+
+.bar-controls {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.bar-icon-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  font-size: 13px;
+  color: #4b5563;
+  border-radius: 4px;
+}
+
+.bar-icon-btn:hover {
+  background: #f0f2f5;
+}
+
+.bar-stop:hover {
+  color: #c73f34;
+}
+
+/* --- Task picker flyout ("Start a Task") --- */
+
+.task-panel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #d8dde3;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 30, 20, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow: hidden;
+  color: #1b2230;
+  text-align: left;
+}
+
+.task-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-panel-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.task-panel-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: #9aa7b8;
+  padding: 0 4px;
+}
+
+.task-panel-close:hover {
+  color: #1b2230;
+}
+
+.task-search {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #d8dde3;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1b2230;
+  background: #fafbfc;
+}
+
+.task-tree {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-row {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 6px;
+  font-size: 13px;
+  color: #1b2230;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-row:hover:not(:disabled) {
+  background: #eef7f1;
+}
+
+.task-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.confirm-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+.confirm-box {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #d8dde3;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 30, 20, 0.22);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.confirm-box p {
+  margin: 0;
+  font-size: 13px;
+  color: #1b2230;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn-primary {
+  background: #35d07f;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #2bb86e;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 13px;
+}
