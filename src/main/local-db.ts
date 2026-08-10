@@ -7,7 +7,7 @@ let db: Database.Database | null = null;
 
 function getDb(): Database.Database {
   if (!db) {
-    db = new Database(join(app.getPath('userData'), 'timecamp-local.db'));
+    db = new Database(join(app.getPath('userData'), 'wa-track-local.db'));
     db.pragma('journal_mode = WAL');
   }
   return db;

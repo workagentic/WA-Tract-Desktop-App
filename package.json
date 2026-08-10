@@ -1,7 +1,7 @@
 {
   "name": "desktop_app",
   "version": "1.0.0",
-  "description": "TimeCamp desktop app (Electron + React + TypeScript)",
+  "description": "WA Track desktop app (Electron + React + TypeScript)",
   "main": "./out/main/main.js",
   "type": "commonjs",
   "scripts": {
@@ -40,9 +40,8 @@
     "vite": "^6.2.0"
   },
   "build": {
-    "appId": "com.timecamp.desktop",
-    "productName": "TimeCamp",
-    "npmRebuild": false,
+    "appId": "com.workagentic.watrack",
+    "productName": "WA Track",
     "directories": {
       "output": "release"
     },
@@ -61,7 +60,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "TimeCamp-Setup-${version}.${ext}"
+      "artifactName": "WA-Track-Setup-${version}.${ext}"
     }
   }
 }
