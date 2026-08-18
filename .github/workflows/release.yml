@@ -28,6 +28,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Windows Defender's real-time scanner on windows-latest runners is
+      # known to quarantine/delete freshly-built unsigned NSIS installers a
+      # few seconds after they're written (electron-builder is unsigned here
+      # - no CSC_LINK configured). That's why v1.0.0's release had the
+      # .blockmap (computed right after build) but not the .exe itself
+      # (deleted before the publish step could upload it), with no build
+      # failure to show for it. Excluding the workspace stops Defender from
+      # touching the output at all.
+      - name: Exclude workspace from Windows Defender
+        shell: powershell
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       - name: Write .env.production
         run: echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env.production
 
@@ -42,3 +54,17 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # electron-builder can exit 0 even if the installer itself never made
+      # it into the release (this is exactly what happened in v1.0.0 - only
+      # the .blockmap uploaded). Fail the job loudly instead of publishing a
+      # release silently missing its main asset, whatever the cause.
+      - name: Verify installer was actually built
+        shell: bash
+        run: |
+          FILE=$(find release -maxdepth 1 -name '*.exe' ! -name '*.blockmap' | head -n1)
+          if [ -z "$FILE" ] || [ ! -s "$FILE" ]; then
+            echo "::error::No non-empty installer .exe found in release/ - aborting."
+            exit 1
+          fi
+          echo "Installer present: $FILE ($(stat -c%s "$FILE") bytes)"
