@@ -4,6 +4,7 @@ import { join } from 'path';
 import { SYNC_INTERVAL_MS } from '../shared/config';
 import { getPendingTimeEntries, markTimeEntrySynced } from './local-db';
 import { apiFetch, ApiError } from './api-client';
+import { currentEmployeeId } from './timer-service';
 import type { SyncResult } from '../shared/types';
 
 let syncTimer: NodeJS.Timeout | null = null;
@@ -26,7 +27,30 @@ export async function runSyncCycle(): Promise<SyncResult> {
   if (syncInFlight) return lastResult ?? { attempted: 0, synced: 0 };
   syncInFlight = true;
 
-  const pending = getPendingTimeEntries();
+  // local-db's time_entries cache is a single shared table, not scoped per
+  // employee — on a shared machine, a previous employee's session can leave
+  // rows behind that never got synced (e.g. the app was closed offline).
+  // The backend rejects a MANAGER/EMPLOYEE token syncing someone else's
+  // entry (ForbiddenException), and since this used to be one all-or-nothing
+  // batched call, a single leftover foreign entry permanently blocked every
+  // other pending entry in the same batch from ever syncing — including the
+  // current employee's own. Filtering to the currently authenticated
+  // employee here means the batch we actually send can never contain a
+  // foreign entry in the first place; whoever those leftover rows belong to
+  // will sync them correctly next time they log in.
+  const employeeId = currentEmployeeId();
+  const allPending = getPendingTimeEntries();
+  // Number(...) on both sides, not string comparison: entry.employeeId comes
+  // back from SQLite's TEXT-affinity employee_id column (which can mangle a
+  // bound number into e.g. "2.0"), while employeeId here is the raw numeric
+  // value decoded straight off the JWT's `sub` claim — never actually the
+  // same JS type as entry.employeeId despite both being declared `string` in
+  // shared/types.ts (a type declaration neither value's runtime shape
+  // matches). A strict `===` between them is always false.
+  const pending = employeeId
+    ? allPending.filter((entry) => Number(entry.employeeId) === Number(employeeId))
+    : [];
+
   if (pending.length === 0) {
     syncInFlight = false;
     lastResult = { attempted: 0, synced: 0 };

@@ -1,5 +1,6 @@
 import { resolveApiBaseUrl } from './env';
 import { loadTokens, saveTokens, clearTokens } from './token-store';
+import type { ApiEnvelope } from '../shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -41,8 +42,8 @@ export async function ensureFreshAccessToken(): Promise<boolean> {
         notifySessionExpired();
         return false;
       }
-      const data = await res.json();
-      saveTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+      const body = (await res.json()) as ApiEnvelope<{ accessToken: string; refreshToken: string }>;
+      saveTokens({ accessToken: body.data.accessToken, refreshToken: body.data.refreshToken });
       return true;
     } catch (err) {
       console.warn('[api-client] refresh failed', err);
@@ -81,5 +82,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
 
   if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  const body = (await res.json()) as ApiEnvelope<T>;
+  return body.data;
 }

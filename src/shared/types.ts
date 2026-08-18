@@ -1,5 +1,21 @@
 /** Shared types between main and renderer processes (via preload bridge). */
 
+/** Every backend response is wrapped in this envelope by its global ResponseInterceptor. */
+export interface ApiEnvelope<T> {
+  statusCode: number;
+  message: string;
+  data: T;
+}
+
+/** Shape of `data` for every paginated list endpoint (tasks, clients, etc). */
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export interface DeviceCodeResponse {
   userCode: string;
   deviceCode: string;
@@ -29,12 +45,21 @@ export interface JwtPayload {
   exp: number;
 }
 
+export interface ClientRecord {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
 export interface TaskRecord {
   id: string;
   title: string;
   description: string | null;
-  status: string;
-  dueDate: string | null;
+  /** @deprecated Removed from the backend — kept optional only for old cached rows. */
+  status?: string;
+  /** @deprecated Removed from the backend — kept optional only for old cached rows. */
+  dueDate?: string | null;
+  client: ClientRecord | null;
 }
 
 export interface TimeEntryRecord {

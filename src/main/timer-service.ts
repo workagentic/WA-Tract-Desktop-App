@@ -15,14 +15,21 @@ import type { TimeEntryRecord, TimerSnapshot, UnresolvedTimerInfo } from '../sha
 type TickListener = (snapshot: TimerSnapshot) => void;
 const tickListeners = new Set<TickListener>();
 
+type AutoPauseResumeListener = (taskId: string | null) => void;
+const autoPauseResumeListeners = new Set<AutoPauseResumeListener>();
+
 let activeLocalId: string | null = null;
 let running = false;
 let segmentStartMs: number | null = null;
 let baseDurationSeconds = 0;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 let idleCheckTimer: NodeJS.Timeout | null = null;
+// Set only when suspend/lock-screen itself pauses a running timer — distinguishes
+// "paused because the machine slept" from a manual pause or one already paused
+// before sleep, so the wake notification only fires for the case it's meant for.
+let autoPausedBySleep = false;
 
-function currentEmployeeId(): string | null {
+export function currentEmployeeId(): string | null {
   const tokens = loadTokens();
   if (!tokens?.accessToken) return null;
   return decodeJwt(tokens.accessToken)?.sub ?? null;
@@ -83,6 +90,12 @@ function stopIdleWatch(): void {
 export function onTimerTick(cb: TickListener): () => void {
   tickListeners.add(cb);
   return () => tickListeners.delete(cb);
+}
+
+/** Fires once, on wake, only when the timer running before sleep was paused by that sleep — never for a manual pause or an idle-autopause. */
+export function onTimerAutoPausedOnWake(cb: AutoPauseResumeListener): () => void {
+  autoPauseResumeListeners.add(cb);
+  return () => autoPauseResumeListeners.delete(cb);
 }
 
 export function getSnapshot(): TimerSnapshot {
@@ -211,16 +224,25 @@ export function hasActiveTimer(): boolean {
  * Pauses the running timer on sleep/lid-close/lock so the tracked duration
  * stops at the moment the user actually stepped away, instead of continuing
  * to accrue through the entire time the machine was asleep. Never
- * auto-resumes on wake — that's a deliberate, explicit user action.
+ * auto-resumes on wake — that's a deliberate, explicit user action. On wake,
+ * if that auto-pause is what stopped it, onTimerAutoPausedOnWake listeners
+ * fire once so the employee gets an explicit prompt rather than having to
+ * notice the bar's paused state on their own.
  */
 export function wireSystemSleepHandling(): void {
-  powerMonitor.on('suspend', () => {
-    if (activeLocalId && running) pauseTimer();
-  });
-  powerMonitor.on('lock-screen', () => {
-    if (activeLocalId && running) pauseTimer();
-  });
+  const autoPauseOnSleep = () => {
+    if (activeLocalId && running) {
+      pauseTimer();
+      autoPausedBySleep = true;
+    }
+  };
+  powerMonitor.on('suspend', autoPauseOnSleep);
+  powerMonitor.on('lock-screen', autoPauseOnSleep);
   powerMonitor.on('resume', () => {
     notifyTick();
+    if (!autoPausedBySleep) return;
+    autoPausedBySleep = false;
+    const taskId = activeLocalId ? getTimeEntry(activeLocalId)?.taskId ?? null : null;
+    for (const cb of autoPauseResumeListeners) cb(taskId);
   });
 }

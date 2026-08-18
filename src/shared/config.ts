@@ -3,7 +3,6 @@
  * (this file is included in the renderer's tsconfig too) — reading the
  * API_BASE_URL env var happens in main/env.ts, main-process-only.
  */
-export const DEFAULT_API_BASE_URL = 'https://server1.workagentic.us:3000/api/v1';
 
 /** Heartbeat cadence while a timer is running (ms). */
 export const HEARTBEAT_INTERVAL_MS = 30_000;

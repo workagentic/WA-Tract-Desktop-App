@@ -2,6 +2,7 @@ node_modules
 out
 release
 *.tsbuildinfo
+electron.vite.config.*.mjs
 .env
 .env.*
 !.env.example

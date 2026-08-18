@@ -5,12 +5,12 @@
   "main": "./out/main/main.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "start": "electron-vite preview",
+    "dev": "cross-env NODE_ENV=development electron-vite dev",
+    "build": "cross-env NODE_ENV=production electron-vite build",
+    "start": "cross-env NODE_ENV=production electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "dist:win": "electron-vite build && electron-builder --win",
-    "dist:win:fast": "electron-vite build && electron-builder --win dir",
+    "dist:win": "cross-env NODE_ENV=production electron-vite build && electron-builder --win",
+    "dist:win:fast": "cross-env NODE_ENV=production electron-vite build && electron-builder --win dir",
     "dist:win:watch": "nodemon --watch src --ext ts,tsx --delay 3 --exec \"npm run dist:win:fast\""
   },
   "keywords": [],
@@ -32,6 +32,7 @@
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^10.1.0",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
@@ -42,12 +43,21 @@
   "build": {
     "appId": "com.workagentic.watrack",
     "productName": "WA Track",
+    "npmRebuild": false,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "workAgentic",
+        "repo": "WA-Tract-Desktop-App"
+      }
+    ],
     "directories": {
       "output": "release"
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      ".env.production"
     ],
     "asarUnpack": [
       "**/*.node"

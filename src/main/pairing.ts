@@ -3,7 +3,7 @@ import { appendFileSync } from 'fs';
 import { join } from 'path';
 import { resolveApiBaseUrl } from './env';
 import { saveTokens } from './token-store';
-import type { PairingStatus } from '../shared/types';
+import type { ApiEnvelope, DeviceCodeResponse, PairingStatus, PairingTokenSuccess } from '../shared/types';
 
 type StatusListener = (status: PairingStatus) => void;
 const listeners = new Set<StatusListener>();
@@ -51,8 +51,8 @@ export async function startPairing(): Promise<PairingStatus> {
   try {
     const res = await fetch(`${resolveApiBaseUrl()}/auth/pairing/device-code`, { method: 'POST' });
     if (!res.ok) throw new Error(`device-code request failed: ${res.status}`);
-    const data: { userCode: string; deviceCode: string; expiresAt: string; pollIntervalSeconds: number } =
-      await res.json();
+    const body: ApiEnvelope<DeviceCodeResponse> = await res.json();
+    const data = body.data;
 
     setStatus({
       state: 'awaiting_confirmation',
@@ -83,8 +83,8 @@ function poll(deviceCode: string, intervalMs: number, generation: number): void 
       });
 
       if (res.status === 201) {
-        const data = await res.json();
-        saveTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken });
+        const body: ApiEnvelope<PairingTokenSuccess> = await res.json();
+        saveTokens({ accessToken: body.data.accessToken, refreshToken: body.data.refreshToken });
         logPairing(`gen=${generation} current=${generation === currentGeneration} deviceCode=${deviceCode.slice(0, 8)}... result=success`);
         setStatus({ state: 'paired' });
         return;

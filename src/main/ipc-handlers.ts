@@ -15,7 +15,7 @@ import {
   resolveUnresolvedTimer,
 } from './timer-service';
 import { runSyncCycle, getLastSyncResult } from './sync-worker';
-import type { TaskRecord } from '../shared/types';
+import type { PaginatedResult, TaskRecord } from '../shared/types';
 
 export interface IpcDeps {
   closeTimerWidget: () => void;
@@ -43,6 +43,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     return decodeJwt(tokens.accessToken);
   });
   ipcMain.handle('auth:logout', async () => {
+    // A timer left running/paused across logout would otherwise leak into
+    // the next employee's session: timer-service's activeLocalId is
+    // process-wide, not per-employee, so startTimer() for whoever logs in
+    // next would immediately throw ("a timer is already active") instead of
+    // starting their task. Stopping it here — while the outgoing employee's
+    // token is still valid — finalizes their entry with an endTime and
+    // clears activeLocalId before the next login can ever see it. The sync
+    // attempt is best-effort, same as switchToTask()'s pattern; if it fails
+    // the entry just stays 'pending' in the local cache for the background
+    // worker to retry (it will fail to attribute to whoever logs in next,
+    // since the backend rejects a mismatched employeeId, so it's safely
+    // stuck rather than misattributed).
+    if (getSnapshot().entry) {
+      stopTimer();
+      try {
+        await runSyncCycle();
+      } catch {
+        // Non-fatal — see comment above.
+      }
+    }
     clearTokens();
     resetPairingState();
     deps.onLogout();
@@ -59,14 +79,23 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     const tokens = loadTokens();
     const departmentId = tokens?.accessToken ? decodeJwt(tokens.accessToken)?.departmentId : undefined;
     try {
-      const raw = await apiFetch<TaskRecord[]>(
-        `/tasks${departmentId ? `?departmentId=${encodeURIComponent(departmentId)}` : ''}`,
-      );
+      // limit=100 (the backend's max) rather than looping pages — this is a
+      // single employee's task picker, not an admin-scale browser, so one
+      // generously-sized page covers the realistic case.
+      const params = new URLSearchParams({ limit: '100' });
+      if (departmentId !== undefined && departmentId !== null) {
+        params.set('departmentId', String(departmentId));
+      }
+      const page = await apiFetch<PaginatedResult<TaskRecord>>(`/tasks?${params.toString()}`);
       // The backend's Task.id is a numeric PK — coerced to a string here so
       // it actually matches the TaskRecord.id: string contract. Without this,
       // comparing it against a TimeEntryRecord.taskId (always a string, since
       // the local SQLite column is TEXT) silently fails: number 5 !== "5".
-      const tasks = raw.map((t) => ({ ...t, id: String(t.id) }));
+      const tasks = page.data.map((t) => ({
+        ...t,
+        id: String(t.id),
+        client: t.client ? { ...t.client, id: String(t.client.id) } : null,
+      }));
       replaceTasksCache(tasks);
       return tasks;
     } catch (err) {

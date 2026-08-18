@@ -35,6 +35,27 @@ export function initDb(): void {
       due_date TEXT
     );
   `);
+
+  migrateTasksCacheSchema(database);
+}
+
+// tasks_cache predates the Client entity — CREATE TABLE IF NOT EXISTS above is
+// a no-op for anyone who already has a local DB from before this column
+// existed, so it's added explicitly here, guarded by PRAGMA table_info since
+// SQLite has no "ADD COLUMN IF NOT EXISTS".
+function migrateTasksCacheSchema(database: Database.Database): void {
+  const columns = database.prepare(`PRAGMA table_info(tasks_cache)`).all() as Array<{ name: string }>;
+  const existing = new Set(columns.map((c) => c.name));
+  const wantedColumns: Array<[string, string]> = [
+    ['client_id', 'TEXT'],
+    ['client_name', 'TEXT'],
+    ['client_description', 'TEXT'],
+  ];
+  for (const [name, type] of wantedColumns) {
+    if (!existing.has(name)) {
+      database.exec(`ALTER TABLE tasks_cache ADD COLUMN ${name} ${type}`);
+    }
+  }
 }
 
 function rowToEntry(row: any): TimeEntryRecord {
@@ -112,8 +133,11 @@ function rowToTask(row: any): TaskRecord {
     id: row.id,
     title: row.title,
     description: row.description,
-    status: row.status,
-    dueDate: row.due_date,
+    status: row.status ?? undefined,
+    dueDate: row.due_date ?? undefined,
+    client: row.client_id
+      ? { id: row.client_id, name: row.client_name, description: row.client_description }
+      : null,
   };
 }
 
@@ -127,9 +151,21 @@ export function replaceTasksCache(tasks: TaskRecord[]): void {
   const tx = database.transaction((list: TaskRecord[]) => {
     database.prepare(`DELETE FROM tasks_cache`).run();
     const insert = database.prepare(
-      `INSERT INTO tasks_cache (id, title, description, status, due_date) VALUES (@id, @title, @description, @status, @dueDate)`,
+      `INSERT INTO tasks_cache (id, title, description, status, due_date, client_id, client_name, client_description)
+       VALUES (@id, @title, @description, @status, @dueDate, @clientId, @clientName, @clientDescription)`,
     );
-    for (const task of list) insert.run(task);
+    for (const task of list) {
+      insert.run({
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        status: task.status ?? null,
+        dueDate: task.dueDate ?? null,
+        clientId: task.client?.id ?? null,
+        clientName: task.client?.name ?? null,
+        clientDescription: task.client?.description ?? null,
+      });
+    }
   });
   tx(tasks);
 }

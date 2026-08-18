@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TimerSnapshot } from '../shared/types';
+import waLogo from './assets/wa-logo.jpg';
 
 function formatDuration(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
@@ -97,7 +98,7 @@ export function TimerWidget() {
     <div className="widget">
       <div className="timer-bar" ref={barRef}>
         <span className="bar-icon" aria-hidden>
-          ↻
+          <img src={waLogo} alt="" />
         </span>
 
         <button className="bar-task-name" ref={nameSlotRef} onClick={handleOpenPicker} title="Pick a task">

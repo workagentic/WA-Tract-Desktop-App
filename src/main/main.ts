@@ -1,16 +1,32 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, Tray, Menu, ipcMain, screen, Notification } from 'electron';
 import { appendFileSync } from 'fs';
 import { join } from 'path';
-import { initDb } from './local-db';
+import { initDb, getCachedTasks } from './local-db';
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc-handlers';
 import { loadTokens } from './token-store';
 import { ensureFreshAccessToken, onSessionExpired } from './api-client';
-import { onPairingStatusChange } from './pairing';
-import { onTimerTick, findUnresolvedTimer, wireSystemSleepHandling } from './timer-service';
+import { onPairingStatusChange, resetPairingState } from './pairing';
+import {
+  onTimerTick,
+  findUnresolvedTimer,
+  wireSystemSleepHandling,
+  onTimerAutoPausedOnWake,
+  resumeTimer,
+  getSnapshot,
+  stopTimer,
+} from './timer-service';
 import { startSyncWorker, stopSyncWorker, runSyncCycle } from './sync-worker';
 import { createTrayIcon } from './tray-icon';
 
 const isDev = !app.isPackaged;
+
+// Required for Windows to reliably show (and correctly attribute) native
+// Notification toasts from a packaged app — without a matching
+// AppUserModelID, Windows can silently drop the sleep-resume "timer
+// paused" notification with no error anywhere. Must match package.json's
+// build.appId (what the NSIS installer registers on the Start Menu
+// shortcut) and be set before app.whenReady().
+app.setAppUserModelId('com.workagentic.watrack');
 
 /**
  * Main-process console output isn't reliably visible in every launch context
@@ -30,6 +46,18 @@ function logCrash(label: string, err: unknown) {
 
 process.on('unhandledRejection', (err) => logCrash('unhandledRejection', err));
 process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
+
+// Only one WA Track instance may run at a time. requestSingleInstanceLock()
+// atomically claims (or fails to claim) a lock file OS-wide — the first
+// launch wins it and keeps running; every subsequent launch fails to acquire
+// it here and must quit immediately rather than proceeding to create its own
+// tray icon/windows/sync worker alongside the already-running one. The
+// winning instance is notified via 'second-instance' (registered below) so
+// it can surface itself instead of the failed relaunch silently vanishing.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 let pairingWindow: BrowserWindow | null = null;
 let taskPickerWindow: BrowserWindow | null = null;
@@ -197,6 +225,17 @@ function teardownAuthenticatedWindows() {
   taskPickerWindow = null;
 }
 
+/** Called when a second launch attempt is caught by requestSingleInstanceLock — brings the already-running instance to the user's attention instead of leaving the relaunch's click looking like a no-op. */
+function focusExistingApp() {
+  if (pairingWindow && !pairingWindow.isDestroyed()) {
+    pairingWindow.show();
+    pairingWindow.focus();
+    return;
+  }
+  showTimerBar();
+  timerBarWindow?.focus();
+}
+
 function createTray() {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('WA Track');
@@ -257,6 +296,44 @@ function wireTimerBroadcast() {
   });
 }
 
+/**
+ * The bar already reflects a paused timer (⏸ becomes ▶) after sleep/lock,
+ * but that's easy to miss — especially if the bar was hidden when the lid
+ * closed. This surfaces a native OS notification on wake so the employee
+ * actually notices, with a one-click resume straight from the notification.
+ */
+function wireSleepResumeNotification() {
+  onTimerAutoPausedOnWake((taskId) => {
+    try {
+      if (!Notification.isSupported()) {
+        logCrash('wireSleepResumeNotification', new Error('Notification.isSupported() returned false'));
+        return;
+      }
+      const title = taskId ? getCachedTasks().find((t) => t.id === taskId)?.title : null;
+
+      const notification = new Notification({
+        title: 'WA Track — Timer paused',
+        body: title
+          ? `Your timer for "${title}" was paused while your laptop was asleep. Click to resume.`
+          : 'Your timer was paused while your laptop was asleep. Click to resume.',
+      });
+      notification.on('click', () => {
+        resumeTimer();
+        showTimerBar();
+      });
+      notification.show();
+    } catch (err) {
+      // Previously any exception here (e.g. reading the cached task list)
+      // would die silently — an uncaught error inside an event listener
+      // callback, with no visible symptom beyond "no notification ever
+      // appears." Logging it means a real bug is diagnosable instead of
+      // indistinguishable from Windows' own dev-mode notification quirks
+      // (see the comment above this function).
+      logCrash('wireSleepResumeNotification', err);
+    }
+  });
+}
+
 /** Runs once we have (or just obtained) a paired session: reconcile local DB, then show the tray bar (or the picker directly, if a crashed timer needs resolving first). */
 async function bootstrapAfterAuth() {
   // Push any pending/queued rows immediately rather than waiting for the
@@ -310,49 +387,81 @@ async function bootstrapWindows() {
   await bootstrapAfterAuth();
 }
 
-/** Tears down the authenticated session's windows/workers and returns to the pairing screen. */
+/**
+ * Tears down the authenticated session's windows/workers and returns to the
+ * pairing screen. Also reached from the session-expired path (device
+ * revoked, refresh token dead) — tokens are already cleared by the time
+ * that happens, so unlike the auth:logout IPC handler this can't sync the
+ * outgoing entry, but it must still stop it: timer-service's activeLocalId
+ * is process-wide, not per-employee, so leaving it set would make the next
+ * employee's startTimer() throw immediately instead of starting their task.
+ */
 function handleLogout() {
+  if (getSnapshot().entry) {
+    stopTimer();
+  }
   stopSyncWorker();
+  // Without this, pairing.ts's module-level status stays stuck at whatever
+  // it was left at after the original successful pairing ('paired') —
+  // reopening the pairing window would then read that stale status via
+  // getStatus() and show "Paired! Loading your tasks…" forever instead of
+  // ever requesting a fresh device code, since startPairing() is only
+  // triggered when the status is 'idle'.
+  resetPairingState();
   teardownAuthenticatedWindows();
   bootstrapWindows().catch((err) => logCrash('bootstrapWindows (after logout)', err));
 }
 
-app.whenReady().then(() => {
-  initDb();
-  registerIpcHandlers({
-    closeTimerWidget: hideTimerBar,
-    resizeTimerWidget: resizeTimerBar,
-    openTaskPicker: showTaskPicker,
-    closeTaskPicker: hideTaskPicker,
-    onLogout: handleLogout,
+// Everything below only ever runs in the instance that actually won the
+// lock above — a losing instance already called app.quit() and must not
+// touch the DB, IPC, tray, or sync worker even transiently, or it would
+// briefly create exactly the duplicate state this feature exists to prevent.
+if (gotSingleInstanceLock) {
+  // Fires in the winning instance whenever a subsequent launch attempt is
+  // caught by the lock above — there is no "second instance" to actually
+  // stop, since it already quit itself before getting this far.
+  app.on('second-instance', () => {
+    focusExistingApp();
   });
-  wirePairingBroadcast();
-  wireTimerBroadcast();
-  wireSystemSleepHandling();
-  // Any authenticated call anywhere in the app (sync, tasks:list, etc.) that
-  // determines the session is truly dead — not just its short-lived access
-  // token expired, but the refresh token too — routes back here, same as
-  // a manual logout, instead of silently degrading to stale cached data.
-  onSessionExpired(() => handleLogout());
-  createTray();
-  bootstrapWindows().catch((err) => logCrash('bootstrapWindows (initial launch)', err));
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      bootstrapWindows().catch((err) => logCrash('bootstrapWindows (activate)', err));
-    }
+  app.whenReady().then(() => {
+    initDb();
+    registerIpcHandlers({
+      closeTimerWidget: hideTimerBar,
+      resizeTimerWidget: resizeTimerBar,
+      openTaskPicker: showTaskPicker,
+      closeTaskPicker: hideTaskPicker,
+      onLogout: handleLogout,
+    });
+    wirePairingBroadcast();
+    wireTimerBroadcast();
+    wireSystemSleepHandling();
+    wireSleepResumeNotification();
+    // Any authenticated call anywhere in the app (sync, tasks:list, etc.) that
+    // determines the session is truly dead — not just its short-lived access
+    // token expired, but the refresh token too — routes back here, same as
+    // a manual logout, instead of silently degrading to stale cached data.
+    onSessionExpired(() => handleLogout());
+    createTray();
+    bootstrapWindows().catch((err) => logCrash('bootstrapWindows (initial launch)', err));
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        bootstrapWindows().catch((err) => logCrash('bootstrapWindows (activate)', err));
+      }
+    });
   });
-});
 
-app.on('window-all-closed', () => {
-  // Keep the app (and any running timer / sync worker) alive in the tray
-  // even with no windows open, same as most tray-resident apps — closing
-  // the picker/widget window shouldn't kill a running timer's sync loop.
-  if (process.platform === 'darwin') return;
-});
+  app.on('window-all-closed', () => {
+    // Keep the app (and any running timer / sync worker) alive in the tray
+    // even with no windows open, same as most tray-resident apps — closing
+    // the picker/widget window shouldn't kill a running timer's sync loop.
+    if (process.platform === 'darwin') return;
+  });
 
-app.on('before-quit', () => {
-  stopSyncWorker();
-  unregisterIpcHandlers();
-  ipcMain.removeAllListeners();
-});
+  app.on('before-quit', () => {
+    stopSyncWorker();
+    unregisterIpcHandlers();
+    ipcMain.removeAllListeners();
+  });
+}
