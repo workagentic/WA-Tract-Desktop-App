@@ -48,7 +48,8 @@
       {
         "provider": "github",
         "owner": "workAgentic",
-        "repo": "WA-Tract-Desktop-App"
+        "repo": "WA-Tract-Desktop-App",
+        "releaseType": "release"
       }
     ],
     "directories": {
