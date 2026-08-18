@@ -31,6 +31,13 @@ jobs:
       - name: Write .env.production
         run: echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env.production
 
+      # electron-builder only packages what's already in out/ — it doesn't
+      # compile the app itself. out/ is gitignored (never in the checkout),
+      # so without this the asar gets built with nothing in it ("main.js
+      # was not found in this archive").
+      - name: Compile app (main/preload/renderer)
+        run: npm run build
+
       - name: Build and publish (Windows)
         run: npx electron-builder --win --publish always
         env:
