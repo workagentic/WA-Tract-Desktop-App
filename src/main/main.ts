@@ -84,6 +84,11 @@ function createPairingWindow(): BrowserWindow {
     height: 420,
     resizable: true,
     title: 'WA Track — Pair this device',
+    // Packaged builds already show build/icon.ico via the compiled exe's own
+    // resources; this only matters in dev, where Electron has no exe icon to
+    // fall back to and would otherwise show the generic Electron icon in the
+    // title bar/taskbar while the pairing screen itself shows the real logo.
+    icon: join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,

@@ -48,19 +48,70 @@ button {
   gap: 12px;
 }
 
+.pairing-card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(20, 30, 20, 0.08);
+  padding: 40px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.pairing-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.pairing-title {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1b2230;
+}
+
 .code {
-  font-size: 40px;
+  font-size: 36px;
   font-weight: 700;
   letter-spacing: 4px;
-  padding: 16px 28px;
+  padding: 16px 24px;
   border-radius: 12px;
-  background: #f1f5f9;
-  border: 1px solid #d8dde3;
+  background: #eefaf3;
+  border: 1.5px solid #35d07f;
+  color: #1b2230;
 }
 
 .muted {
   color: #64748b;
   font-size: 14px;
+}
+
+.pairing-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid #d8dde3;
+  border-top-color: #35d07f;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .banner {
