@@ -17,6 +17,7 @@ import {
 } from './timer-service';
 import { startSyncWorker, stopSyncWorker, runSyncCycle } from './sync-worker';
 import { createTrayIcon } from './tray-icon';
+import { loadFlyoutAnchor, saveFlyoutAnchor } from './window-position-store';
 
 const isDev = !app.isPackaged;
 
@@ -159,10 +160,60 @@ function flyoutWindowOptions(width: number, height: number) {
   } as const;
 }
 
+// Both flyouts are draggable (via -webkit-app-region: drag on their header/
+// bar in styles.css). They're the same conceptual panel switching content —
+// dragging either one moves "the panel", so both read/write ONE shared
+// anchor rather than each remembering its own spot: dragging the bar to a
+// monitor and then opening the picker should open it right there, not
+// wherever the picker happened to be left last.
+//
+// `moved` fires for our own programmatic setPosition() calls too, not just
+// real drags — but ONLY when the position actually changes. show*()/resize*()
+// call positionFlyout() constantly (e.g. resizeTimerBar runs on every task-
+// title change) and frequently re-apply the exact position the window is
+// already at, which never fires 'moved' at all. A boolean "ignore the next
+// event" flag would get stuck true forever waiting for an event that was
+// never coming, silently swallowing the NEXT *real* drag instead of saving
+// it. Comparing the reported position against the exact coordinates we last
+// set ourselves sidesteps that entirely — no flag, no event-ordering
+// assumptions, just "did this position come from us or not".
+let timerBarLastSetPosition: { x: number; y: number } | null = null;
+let taskPickerLastSetPosition: { x: number; y: number } | null = null;
+
+function positionFlyout(
+  win: BrowserWindow,
+  width: number,
+  height: number,
+  recordLastSet: (pos: { x: number; y: number }) => void,
+) {
+  const anchor = loadFlyoutAnchor();
+  const { workArea } = screen.getPrimaryDisplay();
+  let x: number;
+  let y: number;
+  if (anchor) {
+    x = Math.round(Math.min(Math.max(anchor.centerX - width / 2, workArea.x), workArea.x + workArea.width - width));
+    y = Math.round(Math.min(Math.max(anchor.bottomY - height, workArea.y), workArea.y + workArea.height - height));
+  } else {
+    ({ x, y } = anchorNearTray(width, height));
+  }
+  win.setPosition(x, y);
+  recordLastSet({ x, y });
+}
+
+function persistFlyoutAnchor(win: BrowserWindow): void {
+  const bounds = win.getBounds();
+  saveFlyoutAnchor({ centerX: bounds.x + bounds.width / 2, bottomY: bounds.y + bounds.height });
+}
+
 function ensureTimerBarWindow(): BrowserWindow {
   if (timerBarWindow && !timerBarWindow.isDestroyed()) return timerBarWindow;
   const win = new BrowserWindow(flyoutWindowOptions(BAR_WIDTH, BAR_HEIGHT));
   loadRoute(win, '/timer');
+  win.on('moved', () => {
+    const [x, y] = win.getPosition();
+    if (timerBarLastSetPosition && x === timerBarLastSetPosition.x && y === timerBarLastSetPosition.y) return;
+    persistFlyoutAnchor(win);
+  });
   win.on('closed', () => {
     timerBarWindow = null;
   });
@@ -174,6 +225,11 @@ function ensureTaskPickerWindow(): BrowserWindow {
   if (taskPickerWindow && !taskPickerWindow.isDestroyed()) return taskPickerWindow;
   const win = new BrowserWindow(flyoutWindowOptions(PICKER_WIDTH, PICKER_HEIGHT));
   loadRoute(win, '/tasks');
+  win.on('moved', () => {
+    const [x, y] = win.getPosition();
+    if (taskPickerLastSetPosition && x === taskPickerLastSetPosition.x && y === taskPickerLastSetPosition.y) return;
+    persistFlyoutAnchor(win);
+  });
   win.on('closed', () => {
     taskPickerWindow = null;
   });
@@ -183,8 +239,7 @@ function ensureTaskPickerWindow(): BrowserWindow {
 
 function showTimerBar() {
   const win = ensureTimerBarWindow();
-  const { x, y } = anchorNearTray(BAR_WIDTH, BAR_HEIGHT);
-  win.setPosition(x, y);
+  positionFlyout(win, BAR_WIDTH, BAR_HEIGHT, (pos) => (timerBarLastSetPosition = pos));
   win.show();
 }
 
@@ -198,19 +253,17 @@ function resizeTimerBar(width: number) {
   if (!timerBarWindow || timerBarWindow.isDestroyed()) return;
   const clamped = Math.round(Math.min(Math.max(width, BAR_WIDTH), BAR_MAX_WIDTH));
   timerBarWindow.setSize(clamped, BAR_HEIGHT);
-  const { x, y } = anchorNearTray(clamped, BAR_HEIGHT);
-  timerBarWindow.setPosition(x, y);
+  positionFlyout(timerBarWindow, clamped, BAR_HEIGHT, (pos) => (timerBarLastSetPosition = pos));
 }
 
 // Opening the picker replaces the bar rather than stacking on top of it —
-// both anchor to the same spot above the tray, and only one is ever the
-// thing the user's actively looking at (picking a task vs. watching the
-// timer run). Closing the picker hands back to the bar.
+// both anchor to the same spot (see positionFlyout's shared anchor above),
+// and only one is ever the thing the user's actively looking at (picking a
+// task vs. watching the timer run). Closing the picker hands back to the bar.
 function showTaskPicker() {
   hideTimerBar();
   const win = ensureTaskPickerWindow();
-  const { x, y } = anchorNearTray(PICKER_WIDTH, PICKER_HEIGHT);
-  win.setPosition(x, y);
+  positionFlyout(win, PICKER_WIDTH, PICKER_HEIGHT, (pos) => (taskPickerLastSetPosition = pos));
   win.show();
   win.focus();
 }

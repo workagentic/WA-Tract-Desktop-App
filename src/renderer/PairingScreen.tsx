@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import waLogo from './assets/wa-logo.jpg';
+import waLogo from './assets/wa-logo.png';
 import type { PairingStatus } from '../shared/types';
 
 function formatUserCode(code: string): string {

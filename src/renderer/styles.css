@@ -173,6 +173,9 @@ button {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
+  /* Frameless window — this is the only drag handle it has. Its interactive
+     children (name button, pause/stop controls) opt back out below. */
+  -webkit-app-region: drag;
 }
 
 .bar-task-name {
@@ -188,6 +191,7 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  -webkit-app-region: no-drag;
 }
 
 .bar-task-name:hover {
@@ -216,6 +220,7 @@ button {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .bar-icon-btn {
@@ -259,6 +264,9 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Frameless window — the header is this panel's only drag handle.
+     .task-panel-actions (the icon buttons) opts back out below. */
+  -webkit-app-region: drag;
 }
 
 .task-panel-title {
@@ -273,6 +281,7 @@ button {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .task-panel-icon-btn {

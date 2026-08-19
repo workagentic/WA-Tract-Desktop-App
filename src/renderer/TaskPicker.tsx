@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TaskRecord, TimerSnapshot, UnresolvedTimerInfo } from '../shared/types';
-import waLogo from './assets/wa-logo.jpg';
+import waLogo from './assets/wa-logo.png';
 
 export function TaskPicker() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);

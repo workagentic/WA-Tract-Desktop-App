@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TimerSnapshot } from '../shared/types';
-import waLogo from './assets/wa-logo.jpg';
+import waLogo from './assets/wa-logo.png';
 
 function formatDuration(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
