@@ -71,7 +71,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "WA-Track-Setup-${version}.${ext}"
+      "artifactName": "WA-Track-Setup.${ext}"
     }
   }
 }
