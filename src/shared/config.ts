@@ -15,3 +15,6 @@ export const IDLE_AUTOPAUSE_SECONDS = 5 * 60;
 
 /** Refresh the access token this many ms before it actually expires. */
 export const TOKEN_REFRESH_SKEW_MS = 60_000;
+
+/** After a sleep-triggered auto-pause, how long to wait on wake before auto-resuming the timer (ms). */
+export const AUTO_RESUME_ON_WAKE_DELAY_MS = 30_000;

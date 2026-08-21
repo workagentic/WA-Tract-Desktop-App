@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { powerMonitor } from 'electron';
-import { HEARTBEAT_INTERVAL_MS, IDLE_AUTOPAUSE_SECONDS } from '../shared/config';
+import { AUTO_RESUME_ON_WAKE_DELAY_MS, HEARTBEAT_INTERVAL_MS, IDLE_AUTOPAUSE_SECONDS } from '../shared/config';
 import {
   getTimeEntry,
   getOpenTimeEntry,
@@ -28,6 +28,17 @@ let idleCheckTimer: NodeJS.Timeout | null = null;
 // "paused because the machine slept" from a manual pause or one already paused
 // before sleep, so the wake notification only fires for the case it's meant for.
 let autoPausedBySleep = false;
+// Scheduled on wake after an auto-pause-by-sleep; fires resumeTimer() after
+// AUTO_RESUME_ON_WAKE_DELAY_MS unless something cancels it first (a manual
+// pause/resume/stop, or another sleep cycle starting before it fires).
+let pendingAutoResumeTimeout: NodeJS.Timeout | null = null;
+
+function cancelPendingAutoResume(): void {
+  if (pendingAutoResumeTimeout) {
+    clearTimeout(pendingAutoResumeTimeout);
+    pendingAutoResumeTimeout = null;
+  }
+}
 
 export function currentEmployeeId(): string | null {
   const tokens = loadTokens();
@@ -137,6 +148,7 @@ export function startTimer(taskId: string): TimeEntryRecord {
 }
 
 export function pauseTimer(): TimeEntryRecord | null {
+  cancelPendingAutoResume();
   if (!activeLocalId || !running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   baseDurationSeconds = currentDurationSeconds();
   running = false;
@@ -148,6 +160,7 @@ export function pauseTimer(): TimeEntryRecord | null {
 }
 
 export function resumeTimer(): TimeEntryRecord | null {
+  cancelPendingAutoResume();
   if (!activeLocalId || running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   running = true;
   segmentStartMs = Date.now();
@@ -158,6 +171,7 @@ export function resumeTimer(): TimeEntryRecord | null {
 }
 
 export function stopTimer(): TimeEntryRecord | null {
+  cancelPendingAutoResume();
   if (!activeLocalId) return null;
   updateTimeEntry(activeLocalId, {
     durationSeconds: currentDurationSeconds(),
@@ -223,14 +237,25 @@ export function hasActiveTimer(): boolean {
 /**
  * Pauses the running timer on sleep/lid-close/lock so the tracked duration
  * stops at the moment the user actually stepped away, instead of continuing
- * to accrue through the entire time the machine was asleep. Never
- * auto-resumes on wake — that's a deliberate, explicit user action. On wake,
- * if that auto-pause is what stopped it, onTimerAutoPausedOnWake listeners
- * fire once so the employee gets an explicit prompt rather than having to
- * notice the bar's paused state on their own.
+ * to accrue through the entire time the machine was asleep. On wake, if that
+ * auto-pause is what stopped it: onTimerAutoPausedOnWake listeners fire once
+ * (so the employee gets an explicit notification rather than having to
+ * notice the bar's paused state on their own), and the timer auto-resumes on
+ * its own after AUTO_RESUME_ON_WAKE_DELAY_MS — a deliberate choice to favor
+ * "just keep tracking" over requiring an explicit click every single wake.
+ * That auto-resume is cancelled by any manual pause/resume/stop in the
+ * meantime, or by another sleep cycle starting before it fires (each via
+ * cancelPendingAutoResume()).
  */
 export function wireSystemSleepHandling(): void {
   const autoPauseOnSleep = () => {
+    // Unconditional: if the lid closes/screen locks again while a pending
+    // auto-resume is still counting down from an earlier wake, it must not
+    // survive to fire later while the machine is asleep/locked again. Doing
+    // this outside the running-only branch below matters specifically
+    // because the timer is ALREADY paused during that countdown, so the
+    // "if running" guard alone would silently skip cancelling it.
+    cancelPendingAutoResume();
     if (activeLocalId && running) {
       pauseTimer();
       autoPausedBySleep = true;
@@ -244,5 +269,11 @@ export function wireSystemSleepHandling(): void {
     autoPausedBySleep = false;
     const taskId = activeLocalId ? getTimeEntry(activeLocalId)?.taskId ?? null : null;
     for (const cb of autoPauseResumeListeners) cb(taskId);
+
+    cancelPendingAutoResume();
+    pendingAutoResumeTimeout = setTimeout(() => {
+      pendingAutoResumeTimeout = null;
+      resumeTimer();
+    }, AUTO_RESUME_ON_WAKE_DELAY_MS);
   });
 }

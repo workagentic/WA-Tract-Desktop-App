@@ -358,7 +358,9 @@ function wireTimerBroadcast() {
  * The bar already reflects a paused timer (⏸ becomes ▶) after sleep/lock,
  * but that's easy to miss — especially if the bar was hidden when the lid
  * closed. This surfaces a native OS notification on wake so the employee
- * actually notices, with a one-click resume straight from the notification.
+ * actually notices — timer-service.ts auto-resumes it on its own shortly
+ * after (AUTO_RESUME_ON_WAKE_DELAY_MS), so clicking the notification is just
+ * a shortcut to resume immediately rather than the only way to resume.
  */
 function wireSleepResumeNotification() {
   onTimerAutoPausedOnWake((taskId) => {
@@ -372,8 +374,8 @@ function wireSleepResumeNotification() {
       const notification = new Notification({
         title: 'WA Track — Timer paused',
         body: title
-          ? `Your timer for "${title}" was paused while your laptop was asleep. Click to resume.`
-          : 'Your timer was paused while your laptop was asleep. Click to resume.',
+          ? `Your timer for "${title}" was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.`
+          : "Your timer was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.",
       });
       notification.on('click', () => {
         resumeTimer();
