@@ -1,6 +1,6 @@
 {
   "name": "desktop_app",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "WA Track desktop app (Electron + React + TypeScript)",
   "main": "./out/main/main.js",
   "type": "commonjs",
