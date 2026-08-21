@@ -68,3 +68,26 @@ jobs:
             exit 1
           fi
           echo "Installer present: $FILE ($(stat -c%s "$FILE") bytes)"
+
+      # The check above only proves the LOCAL build produced a real file -
+      # it says nothing about whether electron-builder's upload actually
+      # landed it on GitHub. That gap is exactly what let v1.0.0, v1.0.3,
+      # and v1.0.4 all publish "successfully" while GitHub ended up with a
+      # second, broken release object containing only the .blockmap - a
+      # known intermittent electron-builder/GitHub-publish issue, not
+      # something this workflow can prevent outright. What it CAN do is
+      # refuse to let that go unnoticed: query the release for this exact
+      # tag (which reliably resolves to the real one, unlike /releases/latest
+      # when a duplicate exists) and fail loudly if the real .exe isn't
+      # actually there.
+      - name: Verify the published release actually has the installer
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+          if ! echo "$RESPONSE" | grep -qE '"name":"[^"]*\.exe"'; then
+            echo "::error::Release $TAG has no .exe asset on GitHub, even though the local build succeeded - the upload silently failed. Failing the job so this can't go live broken and unnoticed."
+            exit 1
+          fi
+          echo "Verified: release $TAG has a real .exe asset on GitHub."
