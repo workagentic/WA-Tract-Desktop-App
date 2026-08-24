@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { powerMonitor } from 'electron';
-import { AUTO_RESUME_ON_WAKE_DELAY_MS, HEARTBEAT_INTERVAL_MS, IDLE_AUTOPAUSE_SECONDS } from '../shared/config';
+import { AUTO_RESUME_ON_WAKE_DELAY_MS, HEARTBEAT_INTERVAL_MS, LOCK_SCREEN_GRACE_PERIOD_MS } from '../shared/config';
 import {
   getTimeEntry,
   getOpenTimeEntry,
@@ -23,20 +23,32 @@ let running = false;
 let segmentStartMs: number | null = null;
 let baseDurationSeconds = 0;
 let heartbeatTimer: NodeJS.Timeout | null = null;
-let idleCheckTimer: NodeJS.Timeout | null = null;
-// Set only when suspend/lock-screen itself pauses a running timer — distinguishes
-// "paused because the machine slept" from a manual pause or one already paused
-// before sleep, so the wake notification only fires for the case it's meant for.
-let autoPausedBySleep = false;
-// Scheduled on wake after an auto-pause-by-sleep; fires resumeTimer() after
+// Set only when suspend or a lock-screen grace-period timeout itself pauses a
+// running timer — distinguishes "auto-paused, waiting to come back" from a
+// manual pause, so the wake/unlock notification+auto-resume only fires for
+// the case it's meant for.
+let autoPausedAwaitingResume = false;
+// Scheduled on wake/unlock after an auto-pause; fires resumeTimer() after
 // AUTO_RESUME_ON_WAKE_DELAY_MS unless something cancels it first (a manual
-// pause/resume/stop, or another sleep cycle starting before it fires).
+// pause/resume/stop, or another sleep/lock cycle starting before it fires).
 let pendingAutoResumeTimeout: NodeJS.Timeout | null = null;
+// Scheduled on lock-screen; fires the actual auto-pause after
+// LOCK_SCREEN_GRACE_PERIOD_MS unless the session unlocks first. Windows+L
+// alone never reaches pauseTimer() at all while this is still pending — see
+// wireSystemSleepHandling().
+let pendingLockGraceTimeout: NodeJS.Timeout | null = null;
 
 function cancelPendingAutoResume(): void {
   if (pendingAutoResumeTimeout) {
     clearTimeout(pendingAutoResumeTimeout);
     pendingAutoResumeTimeout = null;
+  }
+}
+
+function cancelPendingLockGrace(): void {
+  if (pendingLockGraceTimeout) {
+    clearTimeout(pendingLockGraceTimeout);
+    pendingLockGraceTimeout = null;
   }
 }
 
@@ -79,31 +91,12 @@ function stopHeartbeat(): void {
   }
 }
 
-function startIdleWatch(): void {
-  stopIdleWatch();
-  idleCheckTimer = setInterval(() => {
-    if (!running) return;
-    const idleSeconds = powerMonitor.getSystemIdleTime();
-    if (idleSeconds >= IDLE_AUTOPAUSE_SECONDS) {
-      pauseTimer();
-      notifyTick();
-    }
-  }, 15_000);
-}
-
-function stopIdleWatch(): void {
-  if (idleCheckTimer) {
-    clearInterval(idleCheckTimer);
-    idleCheckTimer = null;
-  }
-}
-
 export function onTimerTick(cb: TickListener): () => void {
   tickListeners.add(cb);
   return () => tickListeners.delete(cb);
 }
 
-/** Fires once, on wake, only when the timer running before sleep was paused by that sleep — never for a manual pause or an idle-autopause. */
+/** Fires once, on wake/unlock, only when the timer running before was paused by that sleep/lock-timeout — never for a manual pause. */
 export function onTimerAutoPausedOnWake(cb: AutoPauseResumeListener): () => void {
   autoPauseResumeListeners.add(cb);
   return () => autoPauseResumeListeners.delete(cb);
@@ -142,13 +135,13 @@ export function startTimer(taskId: string): TimeEntryRecord {
   segmentStartMs = Date.now();
   baseDurationSeconds = 0;
   startHeartbeat();
-  startIdleWatch();
   notifyTick();
   return entry;
 }
 
 export function pauseTimer(): TimeEntryRecord | null {
   cancelPendingAutoResume();
+  cancelPendingLockGrace();
   if (!activeLocalId || !running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   baseDurationSeconds = currentDurationSeconds();
   running = false;
@@ -161,6 +154,7 @@ export function pauseTimer(): TimeEntryRecord | null {
 
 export function resumeTimer(): TimeEntryRecord | null {
   cancelPendingAutoResume();
+  cancelPendingLockGrace();
   if (!activeLocalId || running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   running = true;
   segmentStartMs = Date.now();
@@ -172,6 +166,7 @@ export function resumeTimer(): TimeEntryRecord | null {
 
 export function stopTimer(): TimeEntryRecord | null {
   cancelPendingAutoResume();
+  cancelPendingLockGrace();
   if (!activeLocalId) return null;
   updateTimeEntry(activeLocalId, {
     durationSeconds: currentDurationSeconds(),
@@ -183,7 +178,6 @@ export function stopTimer(): TimeEntryRecord | null {
     syncStatus: 'pending',
   });
   stopHeartbeat();
-  stopIdleWatch();
   const finalEntry = getTimeEntry(activeLocalId);
   activeLocalId = null;
   running = false;
@@ -226,7 +220,6 @@ export function resolveUnresolvedTimer(action: 'resume' | 'stop'): void {
   }
   adoptUnresolvedAsActive(open);
   startHeartbeat();
-  startIdleWatch();
   notifyTick();
 }
 
@@ -235,45 +228,73 @@ export function hasActiveTimer(): boolean {
 }
 
 /**
- * Pauses the running timer on sleep/lid-close/lock so the tracked duration
- * stops at the moment the user actually stepped away, instead of continuing
- * to accrue through the entire time the machine was asleep. On wake, if that
- * auto-pause is what stopped it: onTimerAutoPausedOnWake listeners fire once
- * (so the employee gets an explicit notification rather than having to
- * notice the bar's paused state on their own), and the timer auto-resumes on
- * its own after AUTO_RESUME_ON_WAKE_DELAY_MS — a deliberate choice to favor
- * "just keep tracking" over requiring an explicit click every single wake.
- * That auto-resume is cancelled by any manual pause/resume/stop in the
- * meantime, or by another sleep cycle starting before it fires (each via
- * cancelPendingAutoResume()).
+ * Runs after any event that ends an auto-pause (real wake-from-sleep, or an
+ * unlock that arrived after the lock-screen grace period already fired and
+ * paused the timer). No-op if the timer isn't actually in that
+ * auto-paused-awaiting-resume state — e.g. an unlock that arrives WHILE the
+ * grace period is still pending never reaches here at all, since nothing was
+ * ever paused for it to "resume" (see the unlock-screen handler below).
+ */
+function handleAutoPauseEnded(): void {
+  notifyTick();
+  if (!autoPausedAwaitingResume) return;
+  autoPausedAwaitingResume = false;
+  const taskId = activeLocalId ? getTimeEntry(activeLocalId)?.taskId ?? null : null;
+  for (const cb of autoPauseResumeListeners) cb(taskId);
+
+  cancelPendingAutoResume();
+  pendingAutoResumeTimeout = setTimeout(() => {
+    pendingAutoResumeTimeout = null;
+    resumeTimer();
+  }, AUTO_RESUME_ON_WAKE_DELAY_MS);
+}
+
+/**
+ * Real sleep (suspend/lid-close) pauses the running timer immediately — the
+ * machine's clock stops, so there's nothing to "wait and see" for. Windows+L
+ * (lock-screen) is different: the machine keeps running, so instead of
+ * pausing immediately it starts a LOCK_SCREEN_GRACE_PERIOD_MS countdown;
+ * only if the session is still locked when that elapses does it actually
+ * pause. Unlocking before then cancels the countdown with no pause/resume
+ * cycle at all — the timer never stopped ticking in the first place. Either
+ * way, once an auto-pause actually happens, waking/unlocking afterward goes
+ * through the same handleAutoPauseEnded() notification + auto-resume path.
  */
 export function wireSystemSleepHandling(): void {
-  const autoPauseOnSleep = () => {
-    // Unconditional: if the lid closes/screen locks again while a pending
-    // auto-resume is still counting down from an earlier wake, it must not
-    // survive to fire later while the machine is asleep/locked again. Doing
-    // this outside the running-only branch below matters specifically
-    // because the timer is ALREADY paused during that countdown, so the
-    // "if running" guard alone would silently skip cancelling it.
+  powerMonitor.on('suspend', () => {
+    // A real sleep supersedes any lock grace period already counting down
+    // (e.g. the machine locked, then actually slept before 15 minutes
+    // passed) — it's about to pause immediately below regardless.
+    cancelPendingLockGrace();
     cancelPendingAutoResume();
     if (activeLocalId && running) {
       pauseTimer();
-      autoPausedBySleep = true;
+      autoPausedAwaitingResume = true;
     }
-  };
-  powerMonitor.on('suspend', autoPauseOnSleep);
-  powerMonitor.on('lock-screen', autoPauseOnSleep);
-  powerMonitor.on('resume', () => {
-    notifyTick();
-    if (!autoPausedBySleep) return;
-    autoPausedBySleep = false;
-    const taskId = activeLocalId ? getTimeEntry(activeLocalId)?.taskId ?? null : null;
-    for (const cb of autoPauseResumeListeners) cb(taskId);
+  });
 
-    cancelPendingAutoResume();
-    pendingAutoResumeTimeout = setTimeout(() => {
-      pendingAutoResumeTimeout = null;
-      resumeTimer();
-    }, AUTO_RESUME_ON_WAKE_DELAY_MS);
+  powerMonitor.on('resume', handleAutoPauseEnded);
+
+  powerMonitor.on('lock-screen', () => {
+    // Defensive, same reasoning as pauseTimer()'s own cancelPendingAutoResume
+    // call: a second lock-screen shouldn't leave an earlier grace period
+    // running underneath a new one.
+    cancelPendingLockGrace();
+    if (!activeLocalId || !running) return;
+    pendingLockGraceTimeout = setTimeout(() => {
+      pendingLockGraceTimeout = null;
+      pauseTimer();
+      autoPausedAwaitingResume = true;
+    }, LOCK_SCREEN_GRACE_PERIOD_MS);
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    if (pendingLockGraceTimeout) {
+      // Unlocked inside the grace window — nothing was ever paused, so
+      // there's nothing to resume or notify about, just stop the countdown.
+      cancelPendingLockGrace();
+      return;
+    }
+    handleAutoPauseEnded();
   });
 }

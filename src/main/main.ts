@@ -355,12 +355,16 @@ function wireTimerBroadcast() {
 }
 
 /**
- * The bar already reflects a paused timer (⏸ becomes ▶) after sleep/lock,
- * but that's easy to miss — especially if the bar was hidden when the lid
- * closed. This surfaces a native OS notification on wake so the employee
- * actually notices — timer-service.ts auto-resumes it on its own shortly
- * after (AUTO_RESUME_ON_WAKE_DELAY_MS), so clicking the notification is just
- * a shortcut to resume immediately rather than the only way to resume.
+ * The bar already reflects a paused timer (⏸ becomes ▶) once an auto-pause
+ * actually happens (immediately on real sleep, or after the lock-screen
+ * grace period elapses — see timer-service.ts's wireSystemSleepHandling),
+ * but that's easy to miss, especially if the bar was hidden. This surfaces a
+ * native OS notification on wake/unlock so the employee actually notices —
+ * timer-service.ts auto-resumes it on its own shortly after
+ * (AUTO_RESUME_ON_WAKE_DELAY_MS), so clicking the notification is just a
+ * shortcut to resume immediately rather than the only way to resume. Never
+ * fires for an unlock that arrives before the lock-screen grace period
+ * elapses — nothing was paused in that case, so there's nothing to notify.
  */
 function wireSleepResumeNotification() {
   onTimerAutoPausedOnWake((taskId) => {
@@ -374,8 +378,8 @@ function wireSleepResumeNotification() {
       const notification = new Notification({
         title: 'WA Track — Timer paused',
         body: title
-          ? `Your timer for "${title}" was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.`
-          : "Your timer was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.",
+          ? `Your timer for "${title}" was paused while your laptop was asleep or locked. It'll resume automatically — click to resume now instead.`
+          : "Your timer was paused while your laptop was asleep or locked. It'll resume automatically — click to resume now instead.",
       });
       notification.on('click', () => {
         resumeTimer();
