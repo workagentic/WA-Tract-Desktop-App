@@ -86,7 +86,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
-          if ! echo "$RESPONSE" | grep -qE '"name":"[^"]*\.exe"'; then
+          if ! echo "$RESPONSE" | grep -qE '"name":[[:space:]]*"[^"]*\.exe"'; then
             echo "::error::Release $TAG has no .exe asset on GitHub, even though the local build succeeded - the upload silently failed. Failing the job so this can't go live broken and unnoticed."
             exit 1
           fi
