@@ -11,6 +11,7 @@ import {
   findUnresolvedTimer,
   wireSystemSleepHandling,
   onTimerAutoPausedOnWake,
+  onTimerResumed,
   resumeTimer,
   getSnapshot,
   stopTimer,
@@ -355,16 +356,15 @@ function wireTimerBroadcast() {
 }
 
 /**
- * The bar already reflects a paused timer (⏸ becomes ▶) once an auto-pause
- * actually happens (immediately on real sleep, or after the lock-screen
- * grace period elapses — see timer-service.ts's wireSystemSleepHandling),
- * but that's easy to miss, especially if the bar was hidden. This surfaces a
- * native OS notification on wake/unlock so the employee actually notices —
+ * The bar already reflects a paused timer (⏸ becomes ▶) as soon as real
+ * sleep auto-pauses it (see timer-service.ts's wireSystemSleepHandling), but
+ * that's easy to miss, especially if the bar was hidden. This surfaces a
+ * native OS notification on wake so the employee actually notices —
  * timer-service.ts auto-resumes it on its own shortly after
  * (AUTO_RESUME_ON_WAKE_DELAY_MS), so clicking the notification is just a
- * shortcut to resume immediately rather than the only way to resume. Never
- * fires for an unlock that arrives before the lock-screen grace period
- * elapses — nothing was paused in that case, so there's nothing to notify.
+ * shortcut to resume immediately rather than the only way to resume. Only
+ * for the sleep/wake case — a lock-triggered pause resumes immediately on
+ * unlock instead, handled by wireLockResumeNotification below.
  */
 function wireSleepResumeNotification() {
   onTimerAutoPausedOnWake((taskId) => {
@@ -378,8 +378,8 @@ function wireSleepResumeNotification() {
       const notification = new Notification({
         title: 'WA Track — Timer paused',
         body: title
-          ? `Your timer for "${title}" was paused while your laptop was asleep or locked. It'll resume automatically — click to resume now instead.`
-          : "Your timer was paused while your laptop was asleep or locked. It'll resume automatically — click to resume now instead.",
+          ? `Your timer for "${title}" was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.`
+          : "Your timer was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.",
       });
       notification.on('click', () => {
         resumeTimer();
@@ -394,6 +394,34 @@ function wireSleepResumeNotification() {
       // indistinguishable from Windows' own dev-mode notification quirks
       // (see the comment above this function).
       logCrash('wireSleepResumeNotification', err);
+    }
+  });
+}
+
+/**
+ * A lock-screen pause resumes the instant the session unlocks (no delay,
+ * unlike sleep/wake) — this just confirms it happened, since there's no
+ * "click to resume now" affordance needed for something that already
+ * resumed on its own.
+ */
+function wireLockResumeNotification() {
+  onTimerResumed((taskId) => {
+    try {
+      if (!Notification.isSupported()) {
+        logCrash('wireLockResumeNotification', new Error('Notification.isSupported() returned false'));
+        return;
+      }
+      const title = taskId ? getCachedTasks().find((t) => t.id === taskId)?.title : null;
+
+      const notification = new Notification({
+        title: 'WA Track — Timer resumed',
+        body: title
+          ? `Your timer for "${title}" has resumed successfully.`
+          : 'Your timer has resumed successfully.',
+      });
+      notification.show();
+    } catch (err) {
+      logCrash('wireLockResumeNotification', err);
     }
   });
 }
@@ -501,6 +529,7 @@ if (gotSingleInstanceLock) {
     wireTimerBroadcast();
     wireSystemSleepHandling();
     wireSleepResumeNotification();
+    wireLockResumeNotification();
     // Any authenticated call anywhere in the app (sync, tasks:list, etc.) that
     // determines the session is truly dead — not just its short-lived access
     // token expired, but the refresh token too — routes back here, same as

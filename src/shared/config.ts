@@ -13,8 +13,5 @@ export const SYNC_INTERVAL_MS = 18_000;
 /** Refresh the access token this many ms before it actually expires. */
 export const TOKEN_REFRESH_SKEW_MS = 60_000;
 
-/** After a sleep- or lock-triggered auto-pause, how long to wait on wake/unlock before auto-resuming the timer (ms). */
+/** After a sleep-triggered auto-pause, how long to wait on wake before auto-resuming the timer (ms). A lock-triggered auto-pause resumes immediately on unlock instead - see timer-service.ts's wireSystemSleepHandling. */
 export const AUTO_RESUME_ON_WAKE_DELAY_MS = 30_000;
-
-/** Windows+L locks the session without sleeping - grace period before a lock turns into an actual auto-pause (ms). */
-export const LOCK_SCREEN_GRACE_PERIOD_MS = 15 * 60 * 1000;
