@@ -10,8 +10,7 @@ import {
   onTimerTick,
   findUnresolvedTimer,
   wireSystemSleepHandling,
-  onTimerAutoPausedOnWake,
-  resumeTimer,
+  onTimerResumed,
   getSnapshot,
   stopTimer,
 } from './timer-service';
@@ -355,31 +354,28 @@ function wireTimerBroadcast() {
 }
 
 /**
- * The bar already reflects a paused timer (⏸ becomes ▶) after sleep/lock,
- * but that's easy to miss — especially if the bar was hidden when the lid
- * closed. This surfaces a native OS notification on wake so the employee
- * actually notices — timer-service.ts auto-resumes it on its own shortly
- * after (AUTO_RESUME_ON_WAKE_DELAY_MS), so clicking the notification is just
- * a shortcut to resume immediately rather than the only way to resume.
+ * The bar already reflects a paused timer (⏸ becomes ▶) once an auto-pause
+ * actually fires — 30s after real sleep or a lock-screen, if the session is
+ * still interrupted that long (see timer-service.ts's
+ * wireSystemSleepHandling) — but that's easy to miss, especially if the bar
+ * was hidden. Lid-open/unlock likewise auto-resume it 30s after the session
+ * is restored, not instantly; this surfaces a native OS notification once
+ * that resume actually happens, so the employee notices.
  */
-function wireSleepResumeNotification() {
-  onTimerAutoPausedOnWake((taskId) => {
+function wireTimerResumedNotification() {
+  onTimerResumed((taskId) => {
     try {
       if (!Notification.isSupported()) {
-        logCrash('wireSleepResumeNotification', new Error('Notification.isSupported() returned false'));
+        logCrash('wireTimerResumedNotification', new Error('Notification.isSupported() returned false'));
         return;
       }
       const title = taskId ? getCachedTasks().find((t) => t.id === taskId)?.title : null;
 
       const notification = new Notification({
-        title: 'WA Track — Timer paused',
+        title: 'WA Track — Timer resumed',
         body: title
-          ? `Your timer for "${title}" was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.`
-          : "Your timer was paused while your laptop was asleep. It'll resume automatically — click to resume now instead.",
-      });
-      notification.on('click', () => {
-        resumeTimer();
-        showTimerBar();
+          ? `Your timer for "${title}" has resumed successfully.`
+          : 'Your timer has resumed successfully.',
       });
       notification.show();
     } catch (err) {
@@ -387,9 +383,8 @@ function wireSleepResumeNotification() {
       // would die silently — an uncaught error inside an event listener
       // callback, with no visible symptom beyond "no notification ever
       // appears." Logging it means a real bug is diagnosable instead of
-      // indistinguishable from Windows' own dev-mode notification quirks
-      // (see the comment above this function).
-      logCrash('wireSleepResumeNotification', err);
+      // indistinguishable from Windows' own dev-mode notification quirks.
+      logCrash('wireTimerResumedNotification', err);
     }
   });
 }
@@ -496,7 +491,7 @@ if (gotSingleInstanceLock) {
     wirePairingBroadcast();
     wireTimerBroadcast();
     wireSystemSleepHandling();
-    wireSleepResumeNotification();
+    wireTimerResumedNotification();
     // Any authenticated call anywhere in the app (sync, tasks:list, etc.) that
     // determines the session is truly dead — not just its short-lived access
     // token expired, but the refresh token too — routes back here, same as

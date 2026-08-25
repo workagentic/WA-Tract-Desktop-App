@@ -10,11 +10,11 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
 /** Debounced sync-worker cadence (ms) — spec calls for ~15-20s. */
 export const SYNC_INTERVAL_MS = 18_000;
 
-/** Auto-pause the running timer after this much system idle time (seconds). */
-export const IDLE_AUTOPAUSE_SECONDS = 5 * 60;
-
 /** Refresh the access token this many ms before it actually expires. */
 export const TOKEN_REFRESH_SKEW_MS = 60_000;
 
-/** After a sleep-triggered auto-pause, how long to wait on wake before auto-resuming the timer (ms). */
-export const AUTO_RESUME_ON_WAKE_DELAY_MS = 30_000;
+/** Windows+L / laptop sleep only pauses the timer if the session is still locked/asleep after this many ms - not immediately. */
+export const AUTO_PAUSE_DELAY_MS = 30_000;
+
+/** After an auto-pause actually fires, unlocking/waking only resumes the timer after this many ms - not immediately. */
+export const AUTO_RESUME_DELAY_MS = 30_000;
