@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { powerMonitor } from 'electron';
-import { AUTO_RESUME_ON_WAKE_DELAY_MS, HEARTBEAT_INTERVAL_MS } from '../shared/config';
+import { HEARTBEAT_INTERVAL_MS } from '../shared/config';
 import {
   getTimeEntry,
   getOpenTimeEntry,
@@ -15,14 +15,8 @@ import type { TimeEntryRecord, TimerSnapshot, UnresolvedTimerInfo } from '../sha
 type TickListener = (snapshot: TimerSnapshot) => void;
 const tickListeners = new Set<TickListener>();
 
-// Fires when a sleep-triggered auto-pause is about to auto-resume after
-// AUTO_RESUME_ON_WAKE_DELAY_MS — lets main.ts show a "resuming shortly, click
-// to resume now" notification for that specific case.
-type AutoPauseResumeListener = (taskId: string | null) => void;
-const autoPauseResumeListeners = new Set<AutoPauseResumeListener>();
-
-// Fires when a lock-triggered auto-pause has just resumed immediately on
-// unlock — lets main.ts show a "timer resumed" confirmation notification.
+// Fires when a suspend- or lock-triggered auto-pause has just resumed on
+// wake/unlock — lets main.ts show a "timer resumed" confirmation notification.
 type TimerResumedListener = (taskId: string | null) => void;
 const timerResumedListeners = new Set<TimerResumedListener>();
 
@@ -32,24 +26,14 @@ let segmentStartMs: number | null = null;
 let baseDurationSeconds = 0;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 // Set only when suspend or lock-screen itself pauses a running timer —
-// distinguishes "auto-paused, waiting to come back" from a manual pause, and
-// which trigger caused it, so wake/unlock applies the right resume behavior
-// (sleep: delayed + notified: lock: immediate + notified) instead of a
-// generic one. Null means no auto-pause is currently pending resumption.
-let autoPauseKind: 'sleep' | 'lock' | null = null;
-// Scheduled on real wake after a sleep-triggered auto-pause; fires
-// resumeTimer() after AUTO_RESUME_ON_WAKE_DELAY_MS unless something cancels
-// it first (a manual pause/resume/stop, or another sleep cycle starting
-// before it fires). Lock-triggered auto-pauses resume immediately on unlock
-// instead and never use this.
-let pendingAutoResumeTimeout: NodeJS.Timeout | null = null;
-
-function cancelPendingAutoResume(): void {
-  if (pendingAutoResumeTimeout) {
-    clearTimeout(pendingAutoResumeTimeout);
-    pendingAutoResumeTimeout = null;
-  }
-}
+// distinguishes "auto-paused, waiting for wake/unlock to resume it" from a
+// manual pause, so resume/unlock-screen only resumes+notifies for the case
+// it's meant for. Windows commonly fires both suspend+lock-screen together
+// on lid-close (and both resume+unlock-screen together on lid-open) — this
+// being a single flag (not per-trigger) means whichever of the two resume
+// events arrives first resumes it and clears the flag, and the second one is
+// then a no-op instead of double-resuming.
+let autoPausedPending = false;
 
 export function currentEmployeeId(): string | null {
   const tokens = loadTokens();
@@ -95,13 +79,7 @@ export function onTimerTick(cb: TickListener): () => void {
   return () => tickListeners.delete(cb);
 }
 
-/** Fires once, on real wake, only when the timer running before was paused by suspend — never for a manual pause or a lock-triggered pause. */
-export function onTimerAutoPausedOnWake(cb: AutoPauseResumeListener): () => void {
-  autoPauseResumeListeners.add(cb);
-  return () => autoPauseResumeListeners.delete(cb);
-}
-
-/** Fires once, on unlock, only when the timer running before was paused by that lock — never for a manual pause or a sleep-triggered pause. */
+/** Fires once, on wake/unlock, only when the timer running before was paused by suspend/lock-screen — never for a manual pause. */
 export function onTimerResumed(cb: TimerResumedListener): () => void {
   timerResumedListeners.add(cb);
   return () => timerResumedListeners.delete(cb);
@@ -145,7 +123,6 @@ export function startTimer(taskId: string): TimeEntryRecord {
 }
 
 export function pauseTimer(): TimeEntryRecord | null {
-  cancelPendingAutoResume();
   if (!activeLocalId || !running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   baseDurationSeconds = currentDurationSeconds();
   running = false;
@@ -157,7 +134,6 @@ export function pauseTimer(): TimeEntryRecord | null {
 }
 
 export function resumeTimer(): TimeEntryRecord | null {
-  cancelPendingAutoResume();
   if (!activeLocalId || running) return activeLocalId ? getTimeEntry(activeLocalId) : null;
   running = true;
   segmentStartMs = Date.now();
@@ -168,7 +144,6 @@ export function resumeTimer(): TimeEntryRecord | null {
 }
 
 export function stopTimer(): TimeEntryRecord | null {
-  cancelPendingAutoResume();
   if (!activeLocalId) return null;
   updateTimeEntry(activeLocalId, {
     durationSeconds: currentDurationSeconds(),
@@ -230,37 +205,18 @@ export function hasActiveTimer(): boolean {
 }
 
 /**
- * Runs on real wake from sleep. No-op unless a suspend actually auto-paused
- * the timer (autoPauseKind === 'sleep') — e.g. a wake with nothing running,
- * or one that arrives after a lock-triggered pause already resumed via
- * unlock-screen, does nothing here.
+ * Runs on real wake (lid-open) or unlock. No-op unless a suspend or
+ * lock-screen actually auto-paused the timer (autoPausedPending) — e.g. a
+ * wake/unlock with nothing running, or the second of a suspend+lock-screen
+ * pair that fired together on lid-close (the first already resumed it and
+ * cleared the flag — see wireSystemSleepHandling's comment).
  */
-function handleSleepWake(): void {
-  notifyTick();
-  if (autoPauseKind !== 'sleep') return;
-  autoPauseKind = null;
-  const taskId = activeLocalId ? getTimeEntry(activeLocalId)?.taskId ?? null : null;
-  for (const cb of autoPauseResumeListeners) cb(taskId);
-
-  cancelPendingAutoResume();
-  pendingAutoResumeTimeout = setTimeout(() => {
-    pendingAutoResumeTimeout = null;
-    resumeTimer();
-  }, AUTO_RESUME_ON_WAKE_DELAY_MS);
-}
-
-/**
- * Runs on unlock. No-op unless a lock-screen actually auto-paused the timer
- * (autoPauseKind === 'lock') — e.g. an unlock with nothing running, or one
- * that arrives after a suspend already claimed the pause as 'sleep' (see the
- * suspend handler below), does nothing here.
- */
-function handleUnlock(): void {
-  if (autoPauseKind !== 'lock') {
+function handleAutoPauseEnd(): void {
+  if (!autoPausedPending) {
     notifyTick();
     return;
   }
-  autoPauseKind = null;
+  autoPausedPending = false;
   const entry = resumeTimer(); // resumeTimer() already calls notifyTick()
   const taskId = entry?.taskId ?? null;
   for (const cb of timerResumedListeners) cb(taskId);
@@ -268,35 +224,30 @@ function handleUnlock(): void {
 
 /**
  * Real sleep (suspend/lid-close) and Windows+L (lock-screen) both pause the
- * running timer immediately — there's no grace period for either. They
- * differ on the resume side: waking from real sleep auto-resumes after
- * AUTO_RESUME_ON_WAKE_DELAY_MS with a "resuming shortly" notification (see
- * handleSleepWake), while unlocking resumes immediately with a "timer
- * resumed" confirmation (see handleUnlock). autoPauseKind records which one
- * is pending so the right resume path runs even if both fire (Windows
- * commonly emits lock-screen right before/with suspend on lid-close): once
- * lock-screen has claimed the pause as 'lock', a subsequent suspend leaves it
- * alone (running is already false, so its own pause is a no-op) and a
- * subsequent resume is a no-op too — unlock-screen is what actually resumes
- * it either way.
+ * running timer immediately, and both resume it immediately — on lid-open
+ * and on unlock respectively — with a "timer resumed" confirmation. Windows
+ * commonly fires lock-screen right alongside suspend on lid-close (and
+ * unlock-screen alongside resume on lid-open); autoPausedPending is a single
+ * flag rather than one per trigger so whichever resume event arrives first
+ * does the actual resuming and the other is a no-op, instead of double-
+ * resuming or firing the notification twice.
  */
 export function wireSystemSleepHandling(): void {
   powerMonitor.on('suspend', () => {
-    cancelPendingAutoResume();
     if (activeLocalId && running) {
       pauseTimer();
-      autoPauseKind = 'sleep';
+      autoPausedPending = true;
     }
   });
 
-  powerMonitor.on('resume', handleSleepWake);
+  powerMonitor.on('resume', handleAutoPauseEnd);
 
   powerMonitor.on('lock-screen', () => {
     if (activeLocalId && running) {
       pauseTimer();
-      autoPauseKind = 'lock';
+      autoPausedPending = true;
     }
   });
 
-  powerMonitor.on('unlock-screen', handleUnlock);
+  powerMonitor.on('unlock-screen', handleAutoPauseEnd);
 }
