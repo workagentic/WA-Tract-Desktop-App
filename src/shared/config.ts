@@ -12,3 +12,9 @@ export const SYNC_INTERVAL_MS = 18_000;
 
 /** Refresh the access token this many ms before it actually expires. */
 export const TOKEN_REFRESH_SKEW_MS = 60_000;
+
+/** Windows+L / laptop sleep only pauses the timer if the session is still locked/asleep after this many ms - not immediately. */
+export const AUTO_PAUSE_DELAY_MS = 30_000;
+
+/** After an auto-pause actually fires, unlocking/waking only resumes the timer after this many ms - not immediately. */
+export const AUTO_RESUME_DELAY_MS = 30_000;

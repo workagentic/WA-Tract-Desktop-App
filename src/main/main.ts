@@ -354,12 +354,13 @@ function wireTimerBroadcast() {
 }
 
 /**
- * The bar already reflects a paused timer (⏸ becomes ▶) as soon as real
- * sleep or a lock-screen auto-pauses it (see timer-service.ts's
- * wireSystemSleepHandling), but that's easy to miss, especially if the bar
- * was hidden. Both lid-open and unlock resume the timer immediately on their
- * own — this just surfaces a native OS notification confirming it, so the
- * employee actually notices.
+ * The bar already reflects a paused timer (⏸ becomes ▶) once an auto-pause
+ * actually fires — 30s after real sleep or a lock-screen, if the session is
+ * still interrupted that long (see timer-service.ts's
+ * wireSystemSleepHandling) — but that's easy to miss, especially if the bar
+ * was hidden. Lid-open/unlock likewise auto-resume it 30s after the session
+ * is restored, not instantly; this surfaces a native OS notification once
+ * that resume actually happens, so the employee notices.
  */
 function wireTimerResumedNotification() {
   onTimerResumed((taskId) => {
