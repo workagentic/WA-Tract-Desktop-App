@@ -50,6 +50,7 @@ function migrateTasksCacheSchema(database: Database.Database): void {
     ['client_id', 'TEXT'],
     ['client_name', 'TEXT'],
     ['client_description', 'TEXT'],
+    ['parent_id', 'TEXT'],
   ];
   for (const [name, type] of wantedColumns) {
     if (!existing.has(name)) {
@@ -138,6 +139,7 @@ function rowToTask(row: any): TaskRecord {
     client: row.client_id
       ? { id: row.client_id, name: row.client_name, description: row.client_description }
       : null,
+    parentId: row.parent_id ?? null,
   };
 }
 
@@ -151,8 +153,8 @@ export function replaceTasksCache(tasks: TaskRecord[]): void {
   const tx = database.transaction((list: TaskRecord[]) => {
     database.prepare(`DELETE FROM tasks_cache`).run();
     const insert = database.prepare(
-      `INSERT INTO tasks_cache (id, title, description, status, due_date, client_id, client_name, client_description)
-       VALUES (@id, @title, @description, @status, @dueDate, @clientId, @clientName, @clientDescription)`,
+      `INSERT INTO tasks_cache (id, title, description, status, due_date, client_id, client_name, client_description, parent_id)
+       VALUES (@id, @title, @description, @status, @dueDate, @clientId, @clientName, @clientDescription, @parentId)`,
     );
     for (const task of list) {
       insert.run({
@@ -164,6 +166,7 @@ export function replaceTasksCache(tasks: TaskRecord[]): void {
         clientId: task.client?.id ?? null,
         clientName: task.client?.name ?? null,
         clientDescription: task.client?.description ?? null,
+        parentId: task.parentId ?? null,
       });
     }
   });

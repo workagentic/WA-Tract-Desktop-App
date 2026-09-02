@@ -117,7 +117,10 @@ const BAR_HEIGHT = 48;
 // truncating it (see TimerWidget.tsx's resize-on-measure effect) — capped
 // here so an absurdly long title can't push the flyout off-screen.
 const BAR_MAX_WIDTH = 640;
-const PICKER_WIDTH = 320;
+// Widened from 320 for the subtask tree — deep nesting eats into the title's
+// available width via the expand-arrow column + compounding indentation, so
+// a bit more room keeps titles readable instead of ellipsizing aggressively.
+const PICKER_WIDTH = 360;
 const PICKER_HEIGHT = 460;
 const ANCHOR_MARGIN_PX = 8;
 

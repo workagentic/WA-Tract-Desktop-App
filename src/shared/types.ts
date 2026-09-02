@@ -60,6 +60,14 @@ export interface TaskRecord {
   /** @deprecated Removed from the backend — kept optional only for old cached rows. */
   dueDate?: string | null;
   client: ClientRecord | null;
+  /**
+   * The parent task's id, or null for a top-level task. tasks:list (see
+   * ipc-handlers.ts) walks GET /tasks/:id/subtasks itself at every depth and
+   * stamps this on the way down — the backend's own list endpoints don't
+   * include it directly. Old cached rows from before this field existed read
+   * back as undefined, which the picker treats the same as null (top-level).
+   */
+  parentId: string | null;
 }
 
 export interface TimeEntryRecord {
