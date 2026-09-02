@@ -79,9 +79,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     const tokens = loadTokens();
     const departmentId = tokens?.accessToken ? decodeJwt(tokens.accessToken)?.departmentId : undefined;
     try {
-      // limit=100 (the backend's max) rather than looping pages — this is a
-      // single employee's task picker, not an admin-scale browser, so one
-      // generously-sized page covers the realistic case.
       const params = new URLSearchParams({ limit: '100' });
       if (departmentId !== undefined && departmentId !== null) {
         params.set('departmentId', String(departmentId));
@@ -91,11 +88,33 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // it actually matches the TaskRecord.id: string contract. Without this,
       // comparing it against a TimeEntryRecord.taskId (always a string, since
       // the local SQLite column is TEXT) silently fails: number 5 !== "5".
-      const tasks = page.data.map((t) => ({
+      const topLevel = page.data.map((t) => ({
         ...t,
         id: String(t.id),
+        parentId: null,
         client: t.client ? { ...t.client, id: String(t.client.id) } : null,
       }));
+      // GET /tasks only ever returns top-level tasks (no subtasks mixed in —
+      // same as the web app's tree), so the picker has to walk
+      // GET /tasks/:id/subtasks itself, at every depth, to see anything below
+      // that. Each parent's own children fetch is independent of its
+      // siblings', so siblings run in parallel; depth-first recursion is
+      // still sequential (a task's children can't be requested before its id
+      // is known), but that's normally only 2-3 levels deep in practice.
+      const tasks: TaskRecord[] = [...topLevel];
+      async function fetchChildrenOf(parent: TaskRecord): Promise<void> {
+        const childPage = await apiFetch<PaginatedResult<TaskRecord>>(`/tasks/${parent.id}/subtasks?limit=100`);
+        const children = childPage.data.map((t) => ({
+          ...t,
+          id: String(t.id),
+          parentId: parent.id,
+          client: t.client ? { ...t.client, id: String(t.client.id) } : null,
+        }));
+        tasks.push(...children);
+        await Promise.all(children.map(fetchChildrenOf));
+      }
+      await Promise.all(topLevel.map(fetchChildrenOf));
+
       replaceTasksCache(tasks);
       return tasks;
     } catch (err) {

@@ -2,6 +2,41 @@ import { useEffect, useMemo, useState } from 'react';
 import type { TaskRecord, TimerSnapshot, UnresolvedTimerInfo } from '../shared/types';
 import waLogo from './assets/wa-logo.png';
 
+/** Chevron-right that rotates 90° open — an actual vector icon instead of the previous ▸/▾ text glyphs, so it stays crisp at a larger size. */
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={open ? 'task-expand-icon task-expand-icon-open' : 'task-expand-icon'}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <polyline points="9 6 15 12 9 18" />
+    </svg>
+  );
+}
+
+interface TaskTreeNode {
+  task: TaskRecord;
+  children: TaskTreeNode[];
+}
+
+interface ClientGroup {
+  clientId: string;
+  clientName: string;
+  roots: TaskTreeNode[];
+}
+
+/** Does this node's own title, or any descendant's, contain the query? */
+function subtreeMatches(node: TaskTreeNode, query: string): boolean {
+  if (node.task.title.toLowerCase().includes(query)) return true;
+  return node.children.some((child) => subtreeMatches(child, query));
+}
+
 export function TaskPicker() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -11,16 +46,28 @@ export function TaskPicker() {
   const [search, setSearch] = useState('');
   const [pendingTask, setPendingTask] = useState<TaskRecord | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  // Manually opened/closed client folders — ignored while searching (see
-  // visibleClientGroups below), so it just remembers what the user had open
-  // once they clear the search box.
+  // Manually opened/closed folders, keyed by id (a client id, or a task's own
+  // id at any depth — subtasks toggle the same way their parent client does)
+  // — ignored while searching (every branch with a match force-opens instead,
+  // see renderTaskNode/the client-group render below), so it just remembers
+  // what the user had open once they clear the search box.
   const [expandedClients, setExpandedClients] = useState<Set<string>>(new Set());
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
 
-  function toggleClient(clientName: string) {
+  function toggleClient(clientId: string) {
     setExpandedClients((prev) => {
       const next = new Set(prev);
-      if (next.has(clientName)) next.delete(clientName);
-      else next.add(clientName);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  }
+
+  function toggleTask(taskId: string) {
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
       return next;
     });
   }
@@ -68,38 +115,44 @@ export function TaskPicker() {
     await window.api.auth.logout();
   }
 
-  // Department -> Client -> Task: the backend already scopes /tasks to the
-  // employee's own department and its clients, so grouping by client here is
-  // purely a display concern, not an authorization one. Grouped from the
-  // full unfiltered task list so the set of folders stays stable regardless
-  // of what's typed into search — only which folders start open, and which
-  // tasks show inside them, changes below.
-  const clientGroups = useMemo(() => {
-    const groups = new Map<string, TaskRecord[]>();
+  // Client -> Task -> Subtask (any depth): the backend already scopes
+  // /tasks to the employee's own department and its clients, so grouping by
+  // client here is purely a display concern, not an authorization one.
+  // Built from the full unfiltered task list so the set of folders/branches
+  // stays stable regardless of what's typed into search — only which ones
+  // are open, and which are visible, changes at render time below.
+  const clientGroups = useMemo<ClientGroup[]>(() => {
+    const childrenByParentId = new Map<string, TaskRecord[]>();
+    const rootsByClientId = new Map<string, TaskRecord[]>();
+    const clientNameById = new Map<string, string>();
+
     for (const task of tasks) {
-      const key = task.client?.name ?? 'No client';
-      const list = groups.get(key);
-      if (list) list.push(task);
-      else groups.set(key, [task]);
+      if (task.parentId) {
+        const list = childrenByParentId.get(task.parentId) ?? [];
+        list.push(task);
+        childrenByParentId.set(task.parentId, list);
+      } else {
+        const key = task.client?.id ?? 'none';
+        const list = rootsByClientId.get(key) ?? [];
+        list.push(task);
+        rootsByClientId.set(key, list);
+        if (!clientNameById.has(key)) clientNameById.set(key, task.client?.name ?? 'No client');
+      }
     }
-    return Array.from(groups.entries());
+
+    function buildNode(task: TaskRecord): TaskTreeNode {
+      const children = (childrenByParentId.get(task.id) ?? []).map(buildNode);
+      return { task, children };
+    }
+
+    return Array.from(rootsByClientId.entries()).map(([clientId, rootTasks]) => ({
+      clientId,
+      clientName: clientNameById.get(clientId) ?? 'No client',
+      roots: rootTasks.map(buildNode),
+    }));
   }, [tasks]);
 
   const query = search.trim().toLowerCase();
-
-  // Search matches either a task's title or its client's folder name — a
-  // client-name match reveals all of that client's tasks (not just the ones
-  // whose own title happens to match too).
-  const visibleClientGroups = useMemo(() => {
-    return clientGroups.map(([clientName, tasksForClient]) => {
-      if (!query) return { clientName, tasks: tasksForClient, matched: false };
-      const clientMatches = clientName.toLowerCase().includes(query);
-      const visibleTasks = clientMatches
-        ? tasksForClient
-        : tasksForClient.filter((t) => t.title.toLowerCase().includes(query));
-      return { clientName, tasks: visibleTasks, matched: clientMatches || visibleTasks.length > 0 };
-    });
-  }, [clientGroups, query]);
 
   const activeTaskTitle = useMemo(() => {
     const taskId = activeSnapshot.entry?.taskId;
@@ -118,7 +171,9 @@ export function TaskPicker() {
 
   // Stops whatever's currently active (a no-op if nothing is), pushes that
   // finalized entry to the backend right away rather than waiting for the
-  // next debounced sync tick, then starts the newly picked task.
+  // next debounced sync tick, then starts the newly picked task. Works the
+  // same whether `task` is top-level or nested at any depth — the timer
+  // itself has no concept of hierarchy, it just tracks a task id.
   async function switchToTask(task: TaskRecord) {
     setBusyTaskId(task.id);
     try {
@@ -164,6 +219,71 @@ export function TaskPicker() {
   function handleClose() {
     window.api.tasks.closePicker();
   }
+
+  function renderTaskRow(task: TaskRecord) {
+    const isActive = activeSnapshot.entry?.taskId === task.id;
+    return (
+      <button
+        key={task.id}
+        className={isActive ? 'task-row task-row-active' : 'task-row'}
+        disabled={(busyTaskId === task.id || !!unresolved) && !isActive}
+        onClick={() => handlePick(task)}
+      >
+        {task.title}
+        {isActive ? ' — running' : ''}
+        {busyTaskId === task.id ? ' — starting…' : ''}
+      </button>
+    );
+  }
+
+  // A node (and its subtree) is hidden entirely while searching unless it or
+  // one of its descendants matches, or an ancestor already matched (which
+  // reveals its whole branch unfiltered — showForced) - the same idea as the
+  // original client-name-match behavior, generalized to any depth.
+  function renderTaskNode(node: TaskTreeNode, showForced: boolean): JSX.Element | null {
+    const { task, children } = node;
+    const ownMatch = query ? task.title.toLowerCase().includes(query) : false;
+    const visible = !query || showForced || subtreeMatches(node, query);
+    if (!visible) return null;
+
+    const hasChildren = children.length > 0;
+    const isOpen = query ? hasChildren : expandedTasks.has(task.id);
+    const revealChildren = showForced || ownMatch;
+
+    return (
+      <div key={task.id} className="task-node">
+        <div className="task-node-row">
+          {hasChildren ? (
+            <button
+              type="button"
+              className="task-expand-btn"
+              onClick={() => toggleTask(task.id)}
+              aria-expanded={isOpen}
+              aria-label={isOpen ? 'Collapse' : 'Expand'}
+            >
+              <ChevronIcon open={isOpen} />
+            </button>
+          ) : (
+            <span className="task-expand-spacer" aria-hidden />
+          )}
+          {renderTaskRow(task)}
+        </div>
+        {isOpen && hasChildren && (
+          <div className="task-group-tasks">
+            {children.map((child) => renderTaskNode(child, revealChildren))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const visibleClientGroups = useMemo(() => {
+    return clientGroups.map((group) => {
+      const clientMatches = query ? group.clientName.toLowerCase().includes(query) : false;
+      const hasMatch = query ? clientMatches || group.roots.some((r) => subtreeMatches(r, query)) : true;
+      return { ...group, matched: hasMatch, clientNameMatched: clientMatches };
+    });
+  }, [clientGroups, query]);
 
   return (
     <div className="widget">
@@ -215,48 +335,36 @@ export function TaskPicker() {
           {!loading && clientGroups.length === 0 && <p className="muted">No tasks found.</p>}
 
           {!loading &&
-            visibleClientGroups.map(({ clientName, tasks: tasksForClient, matched }) => {
-              const isOpen = query ? matched : expandedClients.has(clientName);
-              return (
-                <div key={clientName} className="task-group">
-                  <button
-                    type="button"
-                    className="task-group-header"
-                    onClick={() => toggleClient(clientName)}
-                    aria-expanded={isOpen}
-                  >
-                    <span className="task-group-icon" aria-hidden>
-                      {isOpen ? '📂' : '📁'}
-                    </span>
-                    <span className="task-group-name">{clientName}</span>
-                  </button>
+            visibleClientGroups
+              .filter((group) => group.matched)
+              .map((group) => {
+                const isOpen = query ? true : expandedClients.has(group.clientId);
+                return (
+                  <div key={group.clientId} className="task-group">
+                    <button
+                      type="button"
+                      className="task-group-header"
+                      onClick={() => toggleClient(group.clientId)}
+                      aria-expanded={isOpen}
+                    >
+                      <span className="task-group-icon" aria-hidden>
+                        {isOpen ? '📂' : '📁'}
+                      </span>
+                      <span className="task-group-name">{group.clientName}</span>
+                    </button>
 
-                  {isOpen && (
-                    <div className="task-group-tasks">
-                      {tasksForClient.length === 0 ? (
-                        <p className="muted task-group-empty">No tasks available for this client.</p>
-                      ) : (
-                        tasksForClient.map((task) => {
-                          const isActive = activeSnapshot.entry?.taskId === task.id;
-                          return (
-                            <button
-                              key={task.id}
-                              className={isActive ? 'task-row task-row-active' : 'task-row'}
-                              disabled={(busyTaskId === task.id || !!unresolved) && !isActive}
-                              onClick={() => handlePick(task)}
-                            >
-                              {task.title}
-                              {isActive ? ' — running' : ''}
-                              {busyTaskId === task.id ? ' — starting…' : ''}
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    {isOpen && (
+                      <div className="task-group-tasks">
+                        {group.roots.length === 0 ? (
+                          <p className="muted task-group-empty">No tasks available for this client.</p>
+                        ) : (
+                          group.roots.map((node) => renderTaskNode(node, group.clientNameMatched))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
         </div>
 
         <button className="task-panel-logout" onClick={handleLogout}>

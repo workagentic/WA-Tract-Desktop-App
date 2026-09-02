@@ -344,8 +344,53 @@ button {
   flex-direction: column;
 }
 
+/* One row per task/subtask node: an expand toggle (or a spacer for leaves,
+   so titles still line up in a column) beside the actual pick-this-task
+   button - two separate click targets sharing one visual row. */
+.task-node-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-expand-btn,
+.task-expand-spacer {
+  flex-shrink: 0;
+  width: 22px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #475569;
+  border-radius: 4px;
+}
+
+.task-expand-btn:hover {
+  background: #eef7f1;
+}
+
+.task-expand-icon {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.12s ease;
+}
+
+.task-expand-icon-open {
+  transform: rotate(90deg);
+}
+
+/* Nesting .task-group-tasks inside a .task-node inside another
+   .task-group-tasks compounds its padding-left automatically per depth -
+   no per-level computed indentation needed. */
 .task-row {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   background: none;
   border: none;
