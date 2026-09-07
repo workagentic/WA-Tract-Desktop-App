@@ -1,8 +1,9 @@
-import { app } from 'electron';
+import { app, net } from 'electron';
 import { appendFileSync } from 'fs';
 import { join } from 'path';
 import { resolveApiBaseUrl } from './env';
 import { saveTokens } from './token-store';
+import { describeError } from './error-utils';
 import type { ApiEnvelope, DeviceCodeResponse, PairingStatus, PairingTokenSuccess } from '../shared/types';
 
 type StatusListener = (status: PairingStatus) => void;
@@ -49,7 +50,7 @@ export async function startPairing(): Promise<PairingStatus> {
   const generation = ++currentGeneration;
 
   try {
-    const res = await fetch(`${resolveApiBaseUrl()}/auth/pairing/device-code`, { method: 'POST' });
+    const res = await net.fetch(`${resolveApiBaseUrl()}/auth/pairing/device-code`, { method: 'POST' });
     if (!res.ok) throw new Error(`device-code request failed: ${res.status}`);
     const body: ApiEnvelope<DeviceCodeResponse> = await res.json();
     const data = body.data;
@@ -63,6 +64,7 @@ export async function startPairing(): Promise<PairingStatus> {
 
     poll(data.deviceCode, data.pollIntervalSeconds * 1000, generation);
   } catch (err) {
+    logPairing(`startPairing failed: ${describeError(err)}`);
     setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) });
   }
 
@@ -76,7 +78,7 @@ function poll(deviceCode: string, intervalMs: number, generation: number): void 
     if (generation !== currentGeneration) return; // superseded by a newer pairing attempt
 
     try {
-      const res = await fetch(`${resolveApiBaseUrl()}/auth/pairing/token`, {
+      const res = await net.fetch(`${resolveApiBaseUrl()}/auth/pairing/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceCode }),
@@ -106,6 +108,7 @@ function poll(deviceCode: string, intervalMs: number, generation: number): void 
       // code with no feedback. Surface it after a few failures instead of
       // hiding it.
       consecutiveErrors += 1;
+      logPairing(`poll failed (attempt ${consecutiveErrors}): ${describeError(err)}`);
       if (consecutiveErrors >= 3) {
         setStatus({ state: 'error', message: `Can't reach the WA Track server: ${err instanceof Error ? err.message : String(err)}` });
         return;

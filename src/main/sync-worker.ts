@@ -5,6 +5,7 @@ import { SYNC_INTERVAL_MS } from '../shared/config';
 import { getPendingTimeEntries, markTimeEntrySynced } from './local-db';
 import { apiFetch, ApiError } from './api-client';
 import { currentEmployeeId } from './timer-service';
+import { describeError } from './error-utils';
 import type { SyncResult } from '../shared/types';
 
 let syncTimer: NodeJS.Timeout | null = null;
@@ -80,7 +81,7 @@ export async function runSyncCycle(): Promise<SyncResult> {
     lastResult = { attempted: pending.length, synced: pending.length };
     return lastResult;
   } catch (err) {
-    const message = err instanceof ApiError ? err.message : String(err);
+    const message = err instanceof ApiError ? err.message : describeError(err);
     logSync(`cycle failed: ${message}`);
     lastResult = { attempted: pending.length, synced: 0, error: message };
     return lastResult;
@@ -92,7 +93,7 @@ export async function runSyncCycle(): Promise<SyncResult> {
 export function startSyncWorker(): void {
   stopSyncWorker();
   syncTimer = setInterval(() => {
-    runSyncCycle().catch((err) => logSync(`cycle failed: ${err}`));
+    runSyncCycle().catch((err) => logSync(`cycle failed: ${describeError(err)}`));
   }, SYNC_INTERVAL_MS);
 }
 
