@@ -137,14 +137,17 @@ function createPairingWindow(): BrowserWindow {
 // measured — avoids a jarring 0-width flash on first paint.
 const BAR_WIDTH = 300;
 const BAR_HEIGHT = 48;
-// The ongoing resize floor (not BAR_WIDTH) — just enough for the icon, a
-// short name, the timer, and pause/stop to fit without crowding. Using
-// BAR_WIDTH here instead used to force every bar to stay 300px wide even for
-// a short title like "Test task": .bar-task-name's flex: 1 would then
-// stretch into that forced leftover space, visibly shoving the timer away
-// from the name. The bar should flex down to fit short titles just as
-// readily as it grows for long ones.
-const BAR_MIN_WIDTH = 150;
+// The ongoing resize floor (not BAR_WIDTH) — this is what actually governs
+// the idle "No Task" width, since that text alone needs far less than this;
+// once a real task name is selected the content-fit width from
+// TimerWidget.tsx's resize-on-measure effect naturally grows well past this
+// floor anyway. Deliberately not BAR_WIDTH (300) — that used to force every
+// bar to stay 300px wide even for a short title like "Test task":
+// .bar-task-name's flex: 1 would then stretch into that forced leftover
+// space, visibly shoving the timer away from the name. This floor is
+// intentionally roomier than the bare minimum a short title needs, so the
+// idle widget doesn't look cramped.
+const BAR_MIN_WIDTH = 220;
 // The bar grows past BAR_MIN_WIDTH to fit a long task title in full, on one
 // line, never truncated (see TimerWidget.tsx's resize-on-measure effect) —
 // there's deliberately no fixed upper cap here anymore (a task name should
