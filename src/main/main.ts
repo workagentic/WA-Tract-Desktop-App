@@ -318,8 +318,22 @@ function startTimerBarDrag(): void {
 function stepTimerBarDrag(): void {
   if (!timerBarDragAnchor || !timerBarWindow || timerBarWindow.isDestroyed()) return;
   const { x: cursorX, y: cursorY } = screen.getCursorScreenPoint();
-  const x = timerBarDragAnchor.winX + (cursorX - timerBarDragAnchor.cursorX);
-  const y = timerBarDragAnchor.winY + (cursorY - timerBarDragAnchor.cursorY);
+  const rawX = timerBarDragAnchor.winX + (cursorX - timerBarDragAnchor.cursorX);
+  const rawY = timerBarDragAnchor.winY + (cursorY - timerBarDragAnchor.cursorY);
+
+  // Unclamped, this can push the window fully or partly off every display's
+  // work area (easy to hit dragging toward a screen edge, e.g. the left
+  // edge on a single-monitor laptop) — Windows can then "helpfully" pull an
+  // off-screen window back on screen itself, and that correction has been
+  // observed to also change its SIZE, not just its position, which is
+  // exactly what looked like "the widget grows when I drag it left". Same
+  // work-area clamp positionFlyout/anchorNearTray already use elsewhere,
+  // just applied continuously during the drag instead of only on show/resize.
+  const { workArea } = screen.getDisplayNearestPoint({ x: cursorX, y: cursorY });
+  const [width, height] = timerBarWindow.getSize();
+  const x = Math.min(Math.max(rawX, workArea.x), workArea.x + workArea.width - width);
+  const y = Math.min(Math.max(rawY, workArea.y), workArea.y + workArea.height - height);
+
   timerBarWindow.setPosition(x, y);
   timerBarLastSetPosition = { x, y };
 }
