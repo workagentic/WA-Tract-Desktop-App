@@ -51,6 +51,11 @@ function StopIcon() {
 export function TimerWidget() {
   const [snapshot, setSnapshot] = useState<TimerSnapshot>(EMPTY_SNAPSHOT);
   const [displaySeconds, setDisplaySeconds] = useState(0);
+  // Hover-only (a title attribute, not rendered text) so it can't affect the
+  // width-fit calculation below — a third place (alongside the tray tooltip/
+  // menu and the task picker footer) to confirm which version is actually
+  // running, without adding any visible layout.
+  const [appVersion, setAppVersion] = useState('');
   const barRef = useRef<HTMLDivElement>(null);
   const iconRef = useRef<HTMLSpanElement>(null);
   const nameMeasureRef = useRef<HTMLSpanElement>(null);
@@ -63,6 +68,10 @@ export function TimerWidget() {
     window.api.timer.getActive().then(setSnapshot);
     const unsub = window.api.timer.onTick(setSnapshot);
     return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    window.api.app.getVersion().then(setAppVersion);
   }, []);
 
   // taskTitle comes straight off the snapshot — resolved in main (see
@@ -189,7 +198,7 @@ export function TimerWidget() {
         handler so clicking them never also drags the window.
       */}
       <div className="timer-bar" ref={barRef} onMouseDown={handleBarMouseDown}>
-        <span className="bar-icon" ref={iconRef} aria-hidden>
+        <span className="bar-icon" ref={iconRef} title={appVersion ? `WA Track v${appVersion}` : undefined} aria-hidden>
           <img src={waLogo} alt="" draggable={false} />
         </span>
 
