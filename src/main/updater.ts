@@ -23,6 +23,12 @@ function describe(err: unknown): string {
   return err instanceof Error ? (err.stack ?? err.message) : String(err);
 }
 
+/** Purely informational, no click action — unlike updateReadyNotification, doesn't need to survive GC. */
+function showNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return;
+  new Notification({ title, body }).show();
+}
+
 // Long-lived tray app (can stay running for days) — no need for anything
 // tighter than a few checks a day beyond the one at launch.
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -39,6 +45,13 @@ let wired = false;
 // module also writes never once appeared, meaning the click event was
 // never actually reaching this handler.
 let updateReadyNotification: Notification | null = null;
+// Distinguishes a user-initiated check (tray menu's "Check for Updates")
+// from the silent periodic background one — a background check finding
+// nothing new should stay silent (that's the common case, every 4h), but a
+// manual click deserves SOME visible response either way. Without this, a
+// manual check that finds no update looks exactly like the button doing
+// nothing at all, which is indistinguishable from actually being broken.
+let lastCheckWasManual = false;
 
 /** Call once from app.whenReady(). No-op in dev — electron-updater throws against an unpackaged app (no installed feed to compare against). */
 export function wireAutoUpdater(): void {
@@ -57,8 +70,18 @@ export function wireAutoUpdater(): void {
 
   autoUpdater.on('checking-for-update', () => logUpdate('checking for update'));
   autoUpdater.on('update-available', (info) => logUpdate(`update available: ${info.version}`));
-  autoUpdater.on('update-not-available', (info) => logUpdate(`up to date: ${info.version}`));
-  autoUpdater.on('error', (err) => logUpdate(`error: ${describe(err)}`));
+  autoUpdater.on('update-not-available', (info) => {
+    logUpdate(`up to date: ${info.version}`);
+    if (lastCheckWasManual) {
+      showNotification('WA Track', `You're already on the latest version (v${info.version}).`);
+    }
+  });
+  autoUpdater.on('error', (err) => {
+    logUpdate(`error: ${describe(err)}`);
+    if (lastCheckWasManual) {
+      showNotification('WA Track — Update check failed', 'Could not check for updates. Check your connection and try again.');
+    }
+  });
   autoUpdater.on('download-progress', (progress) => logUpdate(`downloading update: ${Math.round(progress.percent)}%`));
 
   autoUpdater.on('update-downloaded', (info) => {
@@ -86,10 +109,25 @@ export function wireAutoUpdater(): void {
   setInterval(checkForUpdatesNow, CHECK_INTERVAL_MS);
 }
 
-/** Manual trigger (e.g. the tray menu's "Check for Updates") as well as the periodic background check above — both go through the same path. */
-export function checkForUpdatesNow(): void {
-  if (!app.isPackaged) return;
+/**
+ * Manual trigger (e.g. the tray menu's "Check for Updates") as well as the
+ * periodic background check above — both go through the same path.
+ * `manual` gates whether a "no update found"/error result gets a visible
+ * notification (see update-not-available/error handlers above) — the
+ * silent background check firing every 4h shouldn't nag the user just for
+ * confirming nothing changed, but a deliberate click should always get some
+ * visible response.
+ */
+export function checkForUpdatesNow(manual = false): void {
+  if (!app.isPackaged) {
+    if (manual) showNotification('WA Track', 'Update checks are disabled in a development build.');
+    return;
+  }
+  lastCheckWasManual = manual;
   autoUpdater.checkForUpdates().catch((err) => {
     logUpdate(`checkForUpdates() rejected: ${describe(err)}`);
+    if (manual) {
+      showNotification('WA Track — Update check failed', 'Could not check for updates. Check your connection and try again.');
+    }
   });
 }

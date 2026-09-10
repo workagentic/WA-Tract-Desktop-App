@@ -429,7 +429,7 @@ function createTray() {
     { type: 'separator' },
     {
       label: 'Check for Updates',
-      click: () => checkForUpdatesNow(),
+      click: () => checkForUpdatesNow(true),
     },
     { type: 'separator' },
     {
