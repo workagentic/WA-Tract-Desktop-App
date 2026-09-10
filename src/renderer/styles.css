@@ -362,6 +362,12 @@ button {
   flex-direction: column;
 }
 
+.task-panel-version {
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 11px;
+}
+
 /* One row per task/subtask node: an expand toggle (or a spacer for leaves,
    so titles still line up in a column) beside the actual pick-this-task
    button - two separate click targets sharing one visual row. */

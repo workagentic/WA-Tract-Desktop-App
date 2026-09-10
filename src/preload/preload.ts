@@ -51,6 +51,7 @@ const bridge: DesktopBridge = {
   },
   app: {
     getApiBaseUrl: () => ipcRenderer.invoke('app:getApiBaseUrl'),
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
   },
 };
 

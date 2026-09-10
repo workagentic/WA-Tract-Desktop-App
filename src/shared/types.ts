@@ -144,6 +144,7 @@ export interface DesktopBridge {
   };
   app: {
     getApiBaseUrl: () => Promise<string>;
+    getVersion: () => Promise<string>;
   };
 }
 

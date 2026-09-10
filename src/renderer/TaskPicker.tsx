@@ -48,6 +48,9 @@ export function TaskPicker() {
   });
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  // Shown in the panel footer purely so an update's effect is unmistakable
+  // at a glance while actually using the app, not just from the tray.
+  const [appVersion, setAppVersion] = useState('');
   const [pendingTask, setPendingTask] = useState<TaskRecord | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // Manually opened/closed folders, keyed by id (a client id, or a task's own
@@ -88,6 +91,7 @@ export function TaskPicker() {
       setActiveSnapshot(snapshot);
       setLoading(false);
     })();
+    window.api.app.getVersion().then(setAppVersion);
 
     // This window is a hidden/shown singleton, not recreated per open (see
     // ensureTaskPickerWindow() in main.ts), so the fetch above only ever
@@ -361,6 +365,8 @@ export function TaskPicker() {
                 );
               })}
         </div>
+
+        {appVersion && <div className="task-panel-version muted">v{appVersion}</div>}
 
         {pendingTask && (
           <div className="confirm-overlay">

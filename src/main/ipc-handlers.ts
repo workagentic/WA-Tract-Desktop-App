@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 import { apiFetch, ApiError } from './api-client';
 import { resolveApiBaseUrl } from './env';
 import { loadTokens, clearTokens } from './token-store';
@@ -156,6 +156,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
   // --- app -----------------------------------------------------------
   ipcMain.handle('app:getApiBaseUrl', async () => resolveApiBaseUrl());
+  ipcMain.handle('app:getVersion', async () => app.getVersion());
 }
 
 export function unregisterIpcHandlers(): void {
@@ -182,6 +183,7 @@ export function unregisterIpcHandlers(): void {
     'sync:getStatus',
     'sync:syncNow',
     'app:getApiBaseUrl',
+    'app:getVersion',
   ];
   for (const channel of channels) ipcMain.removeHandler(channel);
 }
