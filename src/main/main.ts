@@ -31,21 +31,23 @@ const isDev = !app.isPackaged;
 // Packaged only, deliberately: Windows caches which executable handles a
 // clicked toast notification per AppUserModelID (this is what re-launches
 // the app on a notification click, e.g. the auto-update "Restart and
-// install now" prompt). If a `npm run dev` run on this same machine ever
-// called this with the SAME id, Windows can end up routing every future
-// click for that id to the dev electron.exe (visible as "-Embedding" in its
-// command line - the flag Windows passes when activating a registered
-// notification handler) instead of whichever copy is actually installed,
-// even though the installed app itself is completely unaffected - this is
-// exactly what caused a click on the update-ready notification to open a
-// bare "Electron" window pointing at this dev checkout instead of
-// installing anything. Scoping this to isPackaged stops dev runs from ever
-// registering under the production app's identity again; a machine that
-// already got mis-registered from a past dev run needs the packaged app
-// fully uninstalled and reinstalled once to clear Windows' cached
-// association, since this code change can't retroactively fix that.
+// install now" prompt) — but that cache lives in Windows' own notification
+// platform data, not in anything this app installs, so uninstalling the
+// app does NOT clear it. `npm run dev` on this same machine having ever
+// called this with the SAME id as the installed app poisoned that cache to
+// point every future click for this id at the dev electron.exe (visible as
+// "-Embedding" in its command line - the flag Windows passes when
+// activating a registered notification handler) instead of whichever copy
+// is actually installed - confirmed via a full uninstall + reinstall still
+// reproducing it, since the app itself was never what was wrong.
+//
+// The id was changed here (watrack -> watrack.desktop) specifically to
+// stop reusing a poisoned id - a genuinely new, never-notified-under id has
+// no stale Windows-side cache to fall back to. Scoping to isPackaged
+// (already in place) stops a future dev run from ever poisoning this NEW
+// id the same way.
 if (!isDev) {
-  app.setAppUserModelId('com.workagentic.watrack');
+  app.setAppUserModelId('com.workagentic.watrack.desktop');
 }
 
 /**

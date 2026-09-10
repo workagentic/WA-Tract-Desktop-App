@@ -1,6 +1,6 @@
 {
   "name": "desktop_app",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "WA Track desktop app (Electron + React + TypeScript)",
   "main": "./out/main/main.js",
   "type": "commonjs",
@@ -42,7 +42,7 @@
     "vite": "^6.2.0"
   },
   "build": {
-    "appId": "com.workagentic.watrack",
+    "appId": "com.workagentic.watrack.desktop",
     "productName": "WA Track",
     "npmRebuild": false,
     "publish": [
