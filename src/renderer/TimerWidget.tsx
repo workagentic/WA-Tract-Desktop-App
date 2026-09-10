@@ -86,7 +86,13 @@ export function TimerWidget() {
   // intrinsic width plus the bar's real gap/padding (read from computed
   // style, not hardcoded) is the only way to get the width the content
   // *actually* needs regardless of the window's current size.
-  useEffect(() => {
+  //
+  // Exposed as a function (not just inline in the effect) so it can also be
+  // re-run, forcibly, right after a drag ends — see handleBarMouseDown.
+  // Dragging across monitors with different display scaling can leave
+  // Windows having resized the window on its own; re-asserting the correct
+  // size once the drag is over snaps it back regardless of the cause.
+  function reassertSize(force: boolean) {
     const bar = barRef.current;
     const icon = iconRef.current;
     const measure = nameMeasureRef.current;
@@ -104,10 +110,14 @@ export function TimerWidget() {
 
     const desiredWidth = Math.ceil(contentWidth + gap * (itemCount - 1) + paddingX + borderX);
 
-    if (lastRequestedWidthRef.current !== desiredWidth) {
+    if (force || lastRequestedWidthRef.current !== desiredWidth) {
       lastRequestedWidthRef.current = desiredWidth;
       window.api.timer.resizeWidget(desiredWidth, TIMER_BAR_HEIGHT);
     }
+  }
+
+  useEffect(() => {
+    reassertSize(false);
   }, [displayName, !!snapshot.entry]);
 
   // Every state transition is written synchronously to SQLite in main
@@ -173,6 +183,11 @@ export function TimerWidget() {
         dragRafRef.current = null;
       }
       window.api.timer.dragEnd();
+      // Force, not the usual "only if it changed" check — this is
+      // specifically to correct any size drift the OS introduced during the
+      // drag itself (see reassertSize's comment above), which our own
+      // lastRequestedWidthRef has no way of knowing happened.
+      reassertSize(true);
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
