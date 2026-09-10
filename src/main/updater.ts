@@ -28,6 +28,17 @@ function describe(err: unknown): string {
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 let wired = false;
+// Kept at module scope deliberately — a Notification created as a local
+// variable with no other reference is eligible for garbage collection the
+// moment its creating function returns, and once GC'd its 'click' listener
+// stops firing. Windows toasts routinely sit in the Action Center for
+// minutes before someone clicks them, so this reliably breaks in practice:
+// confirmed via update.log from a real test run — "update downloaded"
+// logged repeatedly (once per re-check, since the cached download reports
+// as already complete every time), but the "user clicked" log line this
+// module also writes never once appeared, meaning the click event was
+// never actually reaching this handler.
+let updateReadyNotification: Notification | null = null;
 
 /** Call once from app.whenReady(). No-op in dev — electron-updater throws against an unpackaged app (no installed feed to compare against). */
 export function wireAutoUpdater(): void {
@@ -60,15 +71,15 @@ export function wireAutoUpdater(): void {
       logUpdate('update-downloaded: Notification.isSupported() returned false, skipping prompt');
       return;
     }
-    const notification = new Notification({
+    updateReadyNotification = new Notification({
       title: 'WA Track — Update ready',
       body: `Version ${info.version} has been downloaded. Click to restart and install now.`,
     });
-    notification.on('click', () => {
+    updateReadyNotification.on('click', () => {
       logUpdate('user clicked update-ready notification - installing now');
       autoUpdater.quitAndInstall();
     });
-    notification.show();
+    updateReadyNotification.show();
   });
 
   checkForUpdatesNow();
