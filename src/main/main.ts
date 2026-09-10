@@ -124,10 +124,12 @@ const BAR_HEIGHT = 48;
 // from the name. The bar should flex down to fit short titles just as
 // readily as it grows for long ones.
 const BAR_MIN_WIDTH = 150;
-// The bar grows past BAR_MIN_WIDTH to fit a long task title in full rather
-// than truncating it (see TimerWidget.tsx's resize-on-measure effect) —
-// capped here so an absurdly long title can't push the flyout off-screen.
-const BAR_MAX_WIDTH = 640;
+// The bar grows past BAR_MIN_WIDTH to fit a long task title in full, on one
+// line, never truncated (see TimerWidget.tsx's resize-on-measure effect) —
+// there's deliberately no fixed upper cap here anymore (a task name should
+// never get cut off with an ellipsis regardless of length); resizeTimerBar
+// clamps against the actual screen's work area width instead, so it still
+// can't push the flyout off-screen.
 // Widened from 320 for the subtask tree — deep nesting eats into the title's
 // available width via the expand-arrow column + compounding indentation, so
 // a bit more room keeps titles readable instead of ellipsizing aggressively.
@@ -279,7 +281,12 @@ function hideTimerBar() {
 
 function resizeTimerBar(width: number, height: number = BAR_HEIGHT) {
   if (!timerBarWindow || timerBarWindow.isDestroyed()) return;
-  const clamped = Math.round(Math.min(Math.max(width, BAR_MIN_WIDTH), BAR_MAX_WIDTH));
+  // No fixed upper cap — a long task name must never be truncated. Clamped
+  // against the current display's actual work area instead (with a small
+  // margin) purely so the flyout can't extend past the visible screen.
+  const { workArea } = screen.getDisplayNearestPoint(timerBarWindow.getBounds());
+  const maxWidth = workArea.width - 40;
+  const clamped = Math.round(Math.min(Math.max(width, BAR_MIN_WIDTH), maxWidth));
   const clampedHeight = Math.round(height || BAR_HEIGHT);
   // On Windows, a `resizable: false` window (see flyoutWindowOptions) can
   // have its OS-level min/max size silently pinned to whatever size it was
