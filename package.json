@@ -67,8 +67,7 @@
     "win": {
       "target": [
         "nsis"
-      ],
-      "publisherName": "WorkAgentic"
+      ]
     },
     "nsis": {
       "oneClick": false,
