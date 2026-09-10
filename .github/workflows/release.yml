@@ -34,11 +34,17 @@ jobs:
       # - no CSC_LINK configured). That's why v1.0.0's release had the
       # .blockmap (computed right after build) but not the .exe itself
       # (deleted before the publish step could upload it), with no build
-      # failure to show for it. Excluding the workspace stops Defender from
-      # touching the output at all.
+      # failure to show for it - and it happened AGAIN for v1.0.9 (this time
+      # the build step itself failed outright rather than silently
+      # succeeding without the exe) even with just the exclusion path below,
+      # so that alone isn't reliably enough - disabling real-time monitoring
+      # outright for the build is the more aggressive, more commonly used
+      # mitigation for this exact class of CI/Defender interaction.
       - name: Exclude workspace from Windows Defender
         shell: powershell
-        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Set-MpPreference -DisableRealtimeMonitoring $true
 
       - name: Write .env.production
         run: echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env.production
