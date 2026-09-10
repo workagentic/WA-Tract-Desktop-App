@@ -306,35 +306,50 @@ function resizeTimerBar(width: number, height: number = BAR_HEIGHT) {
 // screen.getCursorScreenPoint() (works regardless of which window has
 // focus) and moves the window every step.
 // ---------------------------------------------------------------------------
-let timerBarDragAnchor: { winX: number; winY: number; cursorX: number; cursorY: number } | null = null;
+let timerBarDragAnchor: {
+  winX: number;
+  winY: number;
+  cursorX: number;
+  cursorY: number;
+  width: number;
+  height: number;
+} | null = null;
 
 function startTimerBarDrag(): void {
   if (!timerBarWindow || timerBarWindow.isDestroyed()) return;
   const [winX, winY] = timerBarWindow.getPosition();
+  const [width, height] = timerBarWindow.getSize();
   const { x: cursorX, y: cursorY } = screen.getCursorScreenPoint();
-  timerBarDragAnchor = { winX, winY, cursorX, cursorY };
+  timerBarDragAnchor = { winX, winY, cursorX, cursorY, width, height };
 }
 
+// Confirmed via an isolated repro (see scratchpad/repro-*.js from the debug
+// session that found this): calling win.setPosition(x, y) in a tight loop -
+// exactly what a mousemove-driven drag does - makes a resizable:false,
+// transparent BrowserWindow's width creep by ~1px on EVERY call on Windows,
+// with no setSize() involved at all (300 -> 400 over 100 calls in testing).
+// This is what "the widget grows when I drag it" actually was - not
+// anything about screen edges or the resizable toggle in resizeTimerBar
+// (both tested clean in isolation). win.setBounds({x, y, width, height}),
+// re-asserting the SAME width/height captured once at drag start on every
+// single call, does not accumulate this drift (confirmed: ends at exactly
+// the original size instead of drifting), because it never leaves size
+// implicit for Electron/Chromium to (mis)round on its own.
 function stepTimerBarDrag(): void {
   if (!timerBarDragAnchor || !timerBarWindow || timerBarWindow.isDestroyed()) return;
+  const { width, height } = timerBarDragAnchor;
   const { x: cursorX, y: cursorY } = screen.getCursorScreenPoint();
   const rawX = timerBarDragAnchor.winX + (cursorX - timerBarDragAnchor.cursorX);
   const rawY = timerBarDragAnchor.winY + (cursorY - timerBarDragAnchor.cursorY);
 
-  // Unclamped, this can push the window fully or partly off every display's
-  // work area (easy to hit dragging toward a screen edge, e.g. the left
-  // edge on a single-monitor laptop) — Windows can then "helpfully" pull an
-  // off-screen window back on screen itself, and that correction has been
-  // observed to also change its SIZE, not just its position, which is
-  // exactly what looked like "the widget grows when I drag it left". Same
-  // work-area clamp positionFlyout/anchorNearTray already use elsewhere,
-  // just applied continuously during the drag instead of only on show/resize.
+  // Also keep the drag from pushing the window off the visible work area -
+  // separate, smaller issue from the width-creep bug above, but still worth
+  // guarding against.
   const { workArea } = screen.getDisplayNearestPoint({ x: cursorX, y: cursorY });
-  const [width, height] = timerBarWindow.getSize();
   const x = Math.min(Math.max(rawX, workArea.x), workArea.x + workArea.width - width);
   const y = Math.min(Math.max(rawY, workArea.y), workArea.y + workArea.height - height);
 
-  timerBarWindow.setPosition(x, y);
+  timerBarWindow.setBounds({ x, y, width, height });
   timerBarLastSetPosition = { x, y };
 }
 
