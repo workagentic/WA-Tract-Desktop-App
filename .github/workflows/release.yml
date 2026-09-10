@@ -7,7 +7,7 @@ on:
       - 'v*.*.*'
 
 # Required so the default GITHUB_TOKEN is allowed to create/publish a GitHub
-# Release (electron-builder's --publish step) instead of failing with a 403.
+# Release (the gh CLI publish step below) instead of failing with a 403.
 permissions:
   contents: write
 
@@ -56,14 +56,19 @@ jobs:
       - name: Compile app (main/preload/renderer)
         run: npm run build
 
-      - name: Build and publish (Windows)
-        run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # NOT --publish - electron-builder's own GitHub-upload step has
+      # repeatedly (v1.0.0, v1.0.3, v1.0.4, v1.0.9) uploaded the tiny
+      # .blockmap/latest.yml successfully while silently dropping the actual
+      # installer (~105MB) with no error - a known electron-builder/GitHub
+      # large-asset-upload reliability issue, not something retrying
+      # electron-builder fixes. Build locally here; publish separately below
+      # via the gh CLI, which has far more battle-tested handling of large
+      # binary uploads in CI.
+      - name: Build (Windows)
+        run: npx electron-builder --win
 
-      # electron-builder can exit 0 even if the installer itself never made
-      # it into the release (this is exactly what happened in v1.0.0 - only
-      # the .blockmap uploaded). Fail the job loudly instead of publishing a
+      # electron-builder can exit 0 even if the installer itself was never
+      # actually produced. Fail the job loudly rather than publishing a
       # release silently missing its main asset, whatever the cause.
       - name: Verify installer was actually built
         shell: bash
@@ -75,17 +80,28 @@ jobs:
           fi
           echo "Installer present: $FILE ($(stat -c%s "$FILE") bytes)"
 
-      # The check above only proves the LOCAL build produced a real file -
-      # it says nothing about whether electron-builder's upload actually
-      # landed it on GitHub. That gap is exactly what let v1.0.0, v1.0.3,
-      # and v1.0.4 all publish "successfully" while GitHub ended up with a
-      # second, broken release object containing only the .blockmap - a
-      # known intermittent electron-builder/GitHub-publish issue, not
-      # something this workflow can prevent outright. What it CAN do is
-      # refuse to let that go unnoticed: query the release for this exact
-      # tag (which reliably resolves to the real one, unlike /releases/latest
-      # when a duplicate exists) and fail loudly if the real .exe isn't
-      # actually there.
+      # Delete any stale release for this exact tag first (e.g. left over
+      # from a prior failed run that got as far as creating the release
+      # object) - `gh release create` fails outright if one already exists.
+      # `--cleanup-tag` is deliberately omitted: only the release object
+      # should go, never the tag that triggered this run.
+      - name: Publish release (gh CLI)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" \
+            release/*.exe release/*.exe.blockmap release/latest.yml \
+            --title "$TAG" --generate-notes
+
+      # The build-verification step above only proves the LOCAL build
+      # produced a real file - it says nothing about whether the upload
+      # actually landed it on GitHub. Refuse to let that go unnoticed: query
+      # the release for this exact tag (which reliably resolves to the real
+      # one, unlike /releases/latest when a duplicate exists) and fail
+      # loudly if the real .exe isn't actually there.
       - name: Verify the published release actually has the installer
         shell: bash
         run: |
