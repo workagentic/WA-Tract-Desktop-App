@@ -56,7 +56,17 @@ jobs:
       - name: Compile app (main/preload/renderer)
         run: npm run build
 
-      # NOT --publish - electron-builder's own GitHub-upload step has
+      # --publish never, not just omitting --publish: electron-builder
+      # auto-triggers an IMPLICIT publish attempt whenever it detects a
+      # `publish` config (which package.json has) on a version-tagged commit
+      # (exactly what running from a `vX.Y.Z` tag push is) - even with no
+      # --publish flag at all. That implicit attempt has no GH_TOKEN
+      # available here (it's only set on the "Publish release" step below),
+      # so it fails outright: "GitHub Personal Access Token is not set".
+      # --publish never is the documented way to fully suppress that,
+      # electron-builder's own warning names it by name when this happens.
+      #
+      # Separately: electron-builder's own GitHub-upload step has
       # repeatedly (v1.0.0, v1.0.3, v1.0.4, v1.0.9) uploaded the tiny
       # .blockmap/latest.yml successfully while silently dropping the actual
       # installer (~105MB) with no error - a known electron-builder/GitHub
@@ -65,7 +75,7 @@ jobs:
       # via the gh CLI, which has far more battle-tested handling of large
       # binary uploads in CI.
       - name: Build (Windows)
-        run: npx electron-builder --win
+        run: npx electron-builder --win --publish never
 
       # electron-builder can exit 0 even if the installer itself was never
       # actually produced. Fail the job loudly rather than publishing a
