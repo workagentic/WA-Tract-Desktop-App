@@ -19,10 +19,13 @@ import type { PaginatedResult, TaskRecord } from '../shared/types';
 
 export interface IpcDeps {
   closeTimerWidget: () => void;
-  resizeTimerWidget: (width: number) => void;
+  resizeTimerWidget: (width: number, height?: number) => void;
   openTaskPicker: () => void;
   closeTaskPicker: () => void;
   onLogout: () => void;
+  dragTimerBarStart: () => void;
+  dragTimerBarStep: () => void;
+  dragTimerBarEnd: () => void;
 }
 
 /**
@@ -127,16 +130,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
   // --- timer -----------------------------------------------------------
   ipcMain.handle('timer:getActive', async () => getSnapshot());
-  ipcMain.handle('timer:start', async (_evt, taskId: string) => startTimer(taskId));
+  ipcMain.handle('timer:start', async (_evt, taskId: string, taskTitle?: string | null) =>
+    startTimer(taskId, taskTitle),
+  );
   ipcMain.handle('timer:pause', async () => pauseTimer());
   ipcMain.handle('timer:resume', async () => resumeTimer());
   ipcMain.handle('timer:stop', async () => stopTimer());
   ipcMain.handle('timer:closeWidget', async () => {
     deps.closeTimerWidget();
   });
-  ipcMain.handle('timer:resizeWidget', async (_evt, width: number) => {
-    deps.resizeTimerWidget(width);
+  ipcMain.handle('timer:resizeWidget', async (_evt, width: number, height?: number) => {
+    deps.resizeTimerWidget(width, height);
   });
+  ipcMain.handle('timer:dragStart', async () => deps.dragTimerBarStart());
+  ipcMain.handle('timer:dragStep', async () => deps.dragTimerBarStep());
+  ipcMain.handle('timer:dragEnd', async () => deps.dragTimerBarEnd());
   ipcMain.handle('timer:getUnresolved', async () => findUnresolvedTimer());
   ipcMain.handle('timer:resolveUnresolved', async (_evt, action: 'resume' | 'stop') =>
     resolveUnresolvedTimer(action),
@@ -166,6 +174,9 @@ export function unregisterIpcHandlers(): void {
     'timer:stop',
     'timer:closeWidget',
     'timer:resizeWidget',
+    'timer:dragStart',
+    'timer:dragStep',
+    'timer:dragEnd',
     'timer:getUnresolved',
     'timer:resolveUnresolved',
     'sync:getStatus',

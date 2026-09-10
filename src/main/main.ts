@@ -17,6 +17,7 @@ import {
 import { startSyncWorker, stopSyncWorker, runSyncCycle } from './sync-worker';
 import { createTrayIcon } from './tray-icon';
 import { loadFlyoutAnchor, saveFlyoutAnchor } from './window-position-store';
+import { wireAutoUpdater, checkForUpdatesNow } from './updater';
 
 const isDev = !app.isPackaged;
 
@@ -111,11 +112,21 @@ function createPairingWindow(): BrowserWindow {
 // at a fixed spot on the desktop. `tray.getBounds()` can return an
 // all-zero rect on some Windows configs (icon not yet laid out) — in that
 // case fall back to the work area's bottom-right corner.
+// Used only as the initial window size, before any content has been
+// measured — avoids a jarring 0-width flash on first paint.
 const BAR_WIDTH = 300;
 const BAR_HEIGHT = 48;
-// The bar grows past BAR_WIDTH to fit a long task title in full rather than
-// truncating it (see TimerWidget.tsx's resize-on-measure effect) — capped
-// here so an absurdly long title can't push the flyout off-screen.
+// The ongoing resize floor (not BAR_WIDTH) — just enough for the icon, a
+// short name, the timer, and pause/stop to fit without crowding. Using
+// BAR_WIDTH here instead used to force every bar to stay 300px wide even for
+// a short title like "Test task": .bar-task-name's flex: 1 would then
+// stretch into that forced leftover space, visibly shoving the timer away
+// from the name. The bar should flex down to fit short titles just as
+// readily as it grows for long ones.
+const BAR_MIN_WIDTH = 150;
+// The bar grows past BAR_MIN_WIDTH to fit a long task title in full rather
+// than truncating it (see TimerWidget.tsx's resize-on-measure effect) —
+// capped here so an absurdly long title can't push the flyout off-screen.
 const BAR_MAX_WIDTH = 640;
 // Widened from 320 for the subtask tree — deep nesting eats into the title's
 // available width via the expand-arrow column + compounding indentation, so
@@ -149,6 +160,14 @@ function flyoutWindowOptions(width: number, height: number) {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
+    // Electron defaults these to true even when resizable: false — off for
+    // basic hardening on a small utility flyout that should never actually
+    // maximize/minimize/fullscreen (verified via isolated testing that this
+    // was NOT the cause of the drag-resize bug fixed in stepTimerBarDrag -
+    // see its comment for the real cause and fix).
+    maximizable: false,
+    fullscreenable: false,
+    minimizable: false,
     skipTaskbar: true,
     transparent: true,
     backgroundColor: '#00000000',
@@ -241,7 +260,14 @@ function ensureTaskPickerWindow(): BrowserWindow {
 
 function showTimerBar() {
   const win = ensureTimerBarWindow();
-  positionFlyout(win, BAR_WIDTH, BAR_HEIGHT, (pos) => (timerBarLastSetPosition = pos));
+  // Use the window's OWN current size, not the BAR_WIDTH/BAR_HEIGHT
+  // defaults — a long task title (see resizeTimerBar) can leave the real
+  // window wider than the defaults. Re-anchoring with the wrong, narrower
+  // width here mis-positions the window relative to its actual bounds,
+  // showing up as blank space around the visible content the next time the
+  // bar is shown (e.g. after closing the picker).
+  const [width, height] = win.getSize();
+  positionFlyout(win, width, height, (pos) => (timerBarLastSetPosition = pos));
   win.show();
 }
 
@@ -251,11 +277,85 @@ function hideTimerBar() {
   }
 }
 
-function resizeTimerBar(width: number) {
+function resizeTimerBar(width: number, height: number = BAR_HEIGHT) {
   if (!timerBarWindow || timerBarWindow.isDestroyed()) return;
-  const clamped = Math.round(Math.min(Math.max(width, BAR_WIDTH), BAR_MAX_WIDTH));
-  timerBarWindow.setSize(clamped, BAR_HEIGHT);
-  positionFlyout(timerBarWindow, clamped, BAR_HEIGHT, (pos) => (timerBarLastSetPosition = pos));
+  const clamped = Math.round(Math.min(Math.max(width, BAR_MIN_WIDTH), BAR_MAX_WIDTH));
+  const clampedHeight = Math.round(height || BAR_HEIGHT);
+  // On Windows, a `resizable: false` window (see flyoutWindowOptions) can
+  // have its OS-level min/max size silently pinned to whatever size it was
+  // created at — every later setSize() then gets clamped right back to that
+  // original size, no matter what's requested. Flipping resizable true for
+  // the moment of the actual call sidesteps that; false again immediately
+  // after so the user still can't drag-resize this frameless flyout.
+  timerBarWindow.setResizable(true);
+  timerBarWindow.setSize(clamped, clampedHeight);
+  timerBarWindow.setResizable(false);
+  positionFlyout(timerBarWindow, clamped, clampedHeight, (pos) => (timerBarLastSetPosition = pos));
+}
+
+// ---------------------------------------------------------------------------
+// Manual drag for the timer bar. This is NOT -webkit-app-region: drag — on
+// Windows, an app-region:drag element is hit-tested by the OS as a title bar
+// (HTCAPTION), which makes Windows render its own cursor there and ignore
+// the element's CSS `cursor` entirely. Since the whole point of the "+"
+// indicator (Desktop_APP_CHANGES.md #4/#9) is a visible cursor change on
+// hover, the drag has to be driven from here instead: renderer reports
+// mousedown/mousemove/mouseup, main tracks the delta itself via
+// screen.getCursorScreenPoint() (works regardless of which window has
+// focus) and moves the window every step.
+// ---------------------------------------------------------------------------
+let timerBarDragAnchor: {
+  winX: number;
+  winY: number;
+  cursorX: number;
+  cursorY: number;
+  width: number;
+  height: number;
+} | null = null;
+
+function startTimerBarDrag(): void {
+  if (!timerBarWindow || timerBarWindow.isDestroyed()) return;
+  const [winX, winY] = timerBarWindow.getPosition();
+  const [width, height] = timerBarWindow.getSize();
+  const { x: cursorX, y: cursorY } = screen.getCursorScreenPoint();
+  timerBarDragAnchor = { winX, winY, cursorX, cursorY, width, height };
+}
+
+// Confirmed via an isolated repro (see scratchpad/repro-*.js from the debug
+// session that found this): calling win.setPosition(x, y) in a tight loop -
+// exactly what a mousemove-driven drag does - makes a resizable:false,
+// transparent BrowserWindow's width creep by ~1px on EVERY call on Windows,
+// with no setSize() involved at all (300 -> 400 over 100 calls in testing).
+// This is what "the widget grows when I drag it" actually was - not
+// anything about screen edges or the resizable toggle in resizeTimerBar
+// (both tested clean in isolation). win.setBounds({x, y, width, height}),
+// re-asserting the SAME width/height captured once at drag start on every
+// single call, does not accumulate this drift (confirmed: ends at exactly
+// the original size instead of drifting), because it never leaves size
+// implicit for Electron/Chromium to (mis)round on its own.
+function stepTimerBarDrag(): void {
+  if (!timerBarDragAnchor || !timerBarWindow || timerBarWindow.isDestroyed()) return;
+  const { width, height } = timerBarDragAnchor;
+  const { x: cursorX, y: cursorY } = screen.getCursorScreenPoint();
+  const rawX = timerBarDragAnchor.winX + (cursorX - timerBarDragAnchor.cursorX);
+  const rawY = timerBarDragAnchor.winY + (cursorY - timerBarDragAnchor.cursorY);
+
+  // Also keep the drag from pushing the window off the visible work area -
+  // separate, smaller issue from the width-creep bug above, but still worth
+  // guarding against.
+  const { workArea } = screen.getDisplayNearestPoint({ x: cursorX, y: cursorY });
+  const x = Math.min(Math.max(rawX, workArea.x), workArea.x + workArea.width - width);
+  const y = Math.min(Math.max(rawY, workArea.y), workArea.y + workArea.height - height);
+
+  timerBarWindow.setBounds({ x, y, width, height });
+  timerBarLastSetPosition = { x, y };
+}
+
+function endTimerBarDrag(): void {
+  if (timerBarDragAnchor && timerBarWindow && !timerBarWindow.isDestroyed()) {
+    persistFlyoutAnchor(timerBarWindow);
+  }
+  timerBarDragAnchor = null;
 }
 
 // Opening the picker replaces the bar rather than stacking on top of it —
@@ -313,9 +413,10 @@ function createTray() {
     },
     { type: 'separator' },
     {
-      label: 'Log out',
-      click: () => handleLogout(),
+      label: 'Check for Updates',
+      click: () => checkForUpdatesNow(),
     },
+    { type: 'separator' },
     {
       label: 'Quit',
       click: () => {
@@ -490,11 +591,15 @@ if (gotSingleInstanceLock) {
       openTaskPicker: showTaskPicker,
       closeTaskPicker: hideTaskPicker,
       onLogout: handleLogout,
+      dragTimerBarStart: startTimerBarDrag,
+      dragTimerBarStep: stepTimerBarDrag,
+      dragTimerBarEnd: endTimerBarDrag,
     });
     wirePairingBroadcast();
     wireTimerBroadcast();
     wireSystemSleepHandling();
     wireTimerResumedNotification();
+    wireAutoUpdater();
     // Any authenticated call anywhere in the app (sync, tasks:list, etc.) that
     // determines the session is truly dead — not just its short-lived access
     // token expired, but the refresh token too — routes back here, same as

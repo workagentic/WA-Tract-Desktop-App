@@ -41,7 +41,11 @@ export function TaskPicker() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [unresolved, setUnresolved] = useState<UnresolvedTimerInfo | null>(null);
-  const [activeSnapshot, setActiveSnapshot] = useState<TimerSnapshot>({ entry: null, running: false });
+  const [activeSnapshot, setActiveSnapshot] = useState<TimerSnapshot>({
+    entry: null,
+    running: false,
+    taskTitle: null,
+  });
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [pendingTask, setPendingTask] = useState<TaskRecord | null>(null);
@@ -106,13 +110,6 @@ export function TaskPicker() {
     } finally {
       setRefreshing(false);
     }
-  }
-
-  // The main process owns the actual teardown (clears the stored session,
-  // closes this window along with the timer bar, and reopens pairing) — this
-  // window doesn't navigate anywhere itself, it just triggers that flow.
-  async function handleLogout() {
-    await window.api.auth.logout();
   }
 
   // Client -> Task -> Subtask (any depth): the backend already scopes
@@ -183,7 +180,7 @@ export function TaskPicker() {
       } catch {
         // Non-fatal — the background sync worker keeps retrying regardless.
       }
-      await window.api.timer.start(task.id);
+      await window.api.timer.start(task.id, task.title);
       await window.api.tasks.closePicker();
     } finally {
       setBusyTaskId(null);
@@ -290,7 +287,7 @@ export function TaskPicker() {
       <div className="task-panel">
         <div className="task-panel-header">
           <span className="bar-icon" aria-hidden>
-            <img src={waLogo} alt="" />
+            <img src={waLogo} alt="" draggable={false} />
           </span>
           <span className="task-panel-title">Start a Task</span>
           <div className="task-panel-actions">
@@ -347,9 +344,7 @@ export function TaskPicker() {
                       onClick={() => toggleClient(group.clientId)}
                       aria-expanded={isOpen}
                     >
-                      <span className="task-group-icon" aria-hidden>
-                        {isOpen ? '📂' : '📁'}
-                      </span>
+                      <ChevronIcon open={isOpen} />
                       <span className="task-group-name">{group.clientName}</span>
                     </button>
 
@@ -366,10 +361,6 @@ export function TaskPicker() {
                 );
               })}
         </div>
-
-        <button className="task-panel-logout" onClick={handleLogout}>
-          Log out
-        </button>
 
         {pendingTask && (
           <div className="confirm-overlay">
