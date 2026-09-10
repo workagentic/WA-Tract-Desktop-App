@@ -1,6 +1,6 @@
 {
   "name": "desktop_app",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "WA Track desktop app (Electron + React + TypeScript)",
   "main": "./out/main/main.js",
   "type": "commonjs",
@@ -17,15 +17,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@nestjs/common": "^11.1.28",
     "better-sqlite3": "^13.0.2",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
     "jwt-decode": "^4.0.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -59,7 +56,12 @@
     "files": [
       "out/**/*",
       "package.json",
-      ".env.production"
+      ".env.production",
+      "!node_modules/better-sqlite3/deps/**",
+      "!node_modules/better-sqlite3/prebuilds/darwin-*.node",
+      "!node_modules/better-sqlite3/prebuilds/linux-*.node",
+      "!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node",
+      "!node_modules/better-sqlite3/prebuilds/win32-arm64.node"
     ],
     "asarUnpack": [
       "**/*.node"
