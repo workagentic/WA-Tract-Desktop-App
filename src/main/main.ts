@@ -27,7 +27,26 @@ const isDev = !app.isPackaged;
 // paused" notification with no error anywhere. Must match package.json's
 // build.appId (what the NSIS installer registers on the Start Menu
 // shortcut) and be set before app.whenReady().
-app.setAppUserModelId('com.workagentic.watrack');
+//
+// Packaged only, deliberately: Windows caches which executable handles a
+// clicked toast notification per AppUserModelID (this is what re-launches
+// the app on a notification click, e.g. the auto-update "Restart and
+// install now" prompt). If a `npm run dev` run on this same machine ever
+// called this with the SAME id, Windows can end up routing every future
+// click for that id to the dev electron.exe (visible as "-Embedding" in its
+// command line - the flag Windows passes when activating a registered
+// notification handler) instead of whichever copy is actually installed,
+// even though the installed app itself is completely unaffected - this is
+// exactly what caused a click on the update-ready notification to open a
+// bare "Electron" window pointing at this dev checkout instead of
+// installing anything. Scoping this to isPackaged stops dev runs from ever
+// registering under the production app's identity again; a machine that
+// already got mis-registered from a past dev run needs the packaged app
+// fully uninstalled and reinstalled once to clear Windows' cached
+// association, since this code change can't retroactively fix that.
+if (!isDev) {
+  app.setAppUserModelId('com.workagentic.watrack');
+}
 
 /**
  * Main-process console output isn't reliably visible in every launch context
