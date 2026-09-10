@@ -87,12 +87,7 @@ export function TimerWidget() {
   // style, not hardcoded) is the only way to get the width the content
   // *actually* needs regardless of the window's current size.
   //
-  // Exposed as a function (not just inline in the effect) so it can also be
-  // re-run, forcibly, right after a drag ends — see handleBarMouseDown.
-  // Dragging across monitors with different display scaling can leave
-  // Windows having resized the window on its own; re-asserting the correct
-  // size once the drag is over snaps it back regardless of the cause.
-  function reassertSize(force: boolean) {
+  useEffect(() => {
     const bar = barRef.current;
     const icon = iconRef.current;
     const measure = nameMeasureRef.current;
@@ -110,14 +105,10 @@ export function TimerWidget() {
 
     const desiredWidth = Math.ceil(contentWidth + gap * (itemCount - 1) + paddingX + borderX);
 
-    if (force || lastRequestedWidthRef.current !== desiredWidth) {
+    if (lastRequestedWidthRef.current !== desiredWidth) {
       lastRequestedWidthRef.current = desiredWidth;
       window.api.timer.resizeWidget(desiredWidth, TIMER_BAR_HEIGHT);
     }
-  }
-
-  useEffect(() => {
-    reassertSize(false);
   }, [displayName, !!snapshot.entry]);
 
   // Every state transition is written synchronously to SQLite in main
@@ -168,17 +159,7 @@ export function TimerWidget() {
     if (e.button !== 0) return;
     window.api.timer.dragStart();
 
-    // Only true once the pointer has actually moved — a plain click (press +
-    // release with no movement) never calls dragStep(), and must NOT force a
-    // resize afterwards: that forced resize (setResizable(true) -> setSize()
-    // -> setResizable(false) in main.ts) is itself visible as a brief size
-    // "flicker" on Windows, so doing it on every single click — not just an
-    // actual drag — was exactly what looked like "pressing the logo grows
-    // the widget".
-    let moved = false;
-
     const onMouseMove = () => {
-      moved = true;
       if (dragRafRef.current !== null) return;
       dragRafRef.current = requestAnimationFrame(() => {
         dragRafRef.current = null;
@@ -193,19 +174,6 @@ export function TimerWidget() {
         dragRafRef.current = null;
       }
       window.api.timer.dragEnd();
-      // NOT forced, and only after an actual drag (never a plain click) —
-      // a pure reposition never changes the bar's content, so the normal
-      // "only if it actually changed" check already no-ops here in the
-      // common case. Forcing it unconditionally (a now-reverted earlier
-      // attempt at this) meant every drag — and, worse, every plain click,
-      // since a click also fires this same mouseup — replayed main.ts's
-      // setResizable(true) -> setSize() -> setResizable(false) toggle even
-      // when nothing needed to change, and that toggle is itself visible as
-      // a brief size "flicker" on Windows. maximizable/fullscreenable are
-      // now off too (see flyoutWindowOptions), which was the actual
-      // plausible source of real OS-driven drift this was meant to guard
-      // against.
-      if (moved) reassertSize(false);
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);

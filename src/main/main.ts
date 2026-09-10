@@ -160,13 +160,11 @@ function flyoutWindowOptions(width: number, height: number) {
     frame: false,
     alwaysOnTop: true,
     resizable: false,
-    // Electron defaults these to true even when resizable: false — leaving
-    // them on meant Windows' own snap-to-maximize gesture (dragging near a
-    // screen edge) could still blow the flyout up to a maximized size,
-    // which is very likely what "the widget size increases when I drag it"
-    // actually was: our own code never calls setSize() during a drag (see
-    // startTimerBarDrag/stepTimerBarDrag), so a resize during a drag can
-    // only be the OS doing it.
+    // Electron defaults these to true even when resizable: false — off for
+    // basic hardening on a small utility flyout that should never actually
+    // maximize/minimize/fullscreen (verified via isolated testing that this
+    // was NOT the cause of the drag-resize bug fixed in stepTimerBarDrag -
+    // see its comment for the real cause and fix).
     maximizable: false,
     fullscreenable: false,
     minimizable: false,
