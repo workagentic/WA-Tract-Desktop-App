@@ -405,8 +405,16 @@ function focusExistingApp() {
 
 function createTray() {
   tray = new Tray(createTrayIcon());
-  tray.setToolTip('WA Track');
+  // Shows the actually-running version on hover — the simplest possible way
+  // to confirm at a glance whether an update really landed, rather than
+  // having to infer it from subtler UI changes.
+  tray.setToolTip(`WA Track v${app.getVersion()}`);
   const menu = Menu.buildFromTemplate([
+    {
+      label: `WA Track v${app.getVersion()}`,
+      enabled: false,
+    },
+    { type: 'separator' },
     {
       label: 'Pick a task',
       click: () => {
