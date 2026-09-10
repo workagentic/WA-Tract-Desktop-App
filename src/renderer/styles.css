@@ -67,6 +67,8 @@ button {
   height: 48px;
   border-radius: 10px;
   object-fit: cover;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .pairing-title {
@@ -140,7 +142,14 @@ button {
   margin: 0;
   overflow: hidden;
   display: flex;
-  align-items: center;
+  /* flex-start, not center: .timer-bar sizes itself to its own content (see
+     below) rather than stretching to fill 100% of the window — if the
+     window ever ends up taller than the bar's content for any reason, the
+     extra height shows up as invisible transparent margin below the bar
+     instead of as dead space inside its visible white/bordered box.
+     .task-panel (the task-picker's own child of .widget) sets its own
+     explicit height: 100% and fills the window regardless of this. */
+  align-items: flex-start;
   justify-content: center;
 }
 
@@ -158,12 +167,21 @@ button {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  /* Belt-and-suspenders alongside the JSX draggable={false}: without this,
+     Chromium's native "drag this image out as a file" behavior can hijack a
+     mousedown on the icon before our own drag handler ever sees it — that's
+     also what puts the OS's own "+" copy-cursor badge next to the pointer,
+     not our crosshair. */
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .timer-bar {
   position: relative;
   width: 100%;
-  height: 100%;
+  /* NOT height: 100% — sized to its own content (icon/text line-height +
+     vertical padding below) instead of stretching to fill the window, so
+     any extra window height never shows up as dead space inside the box. */
   box-sizing: border-box;
   background: #ffffff;
   border: 1px solid #35d07f;
@@ -172,14 +190,31 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
-  /* Frameless window — this is the only drag handle it has. Its interactive
-     children (name button, pause/stop controls) opt back out below. */
-  -webkit-app-region: drag;
+  padding: 8px 10px;
+  /* Deliberately NOT -webkit-app-region: drag — on Windows that's hit-tested
+     as a title bar, so the OS renders its own cursor there and ignores this
+     `cursor` property entirely, meaning a custom drag cursor would never
+     actually show. Dragging is instead driven manually from
+     TimerWidget.tsx's onMouseDown (see main.ts's
+     startTimerBarDrag/stepTimerBarDrag), which keeps this a normal DOM
+     element so the crosshair genuinely renders on hover. The name button and
+     pause/stop controls are <button>s and override this back to the normal
+     pointer via the global `button { cursor: pointer }` rule. */
+  cursor: crosshair;
+  transition: box-shadow 0.12s ease;
+}
+
+.timer-bar:hover {
+  box-shadow: 0 8px 24px rgba(20, 30, 20, 0.24);
 }
 
 .bar-task-name {
-  flex: 1;
+  /* NOT flex: 1 — the name should only ever be as wide as its own text
+     (measured and matched by the resize-on-measure effect in
+     TimerWidget.tsx), never stretched to fill leftover window width. That
+     stretch was exactly what pushed the timer away from the name whenever
+     the window was wider than the content needed. */
+  flex: 0 1 auto;
   min-width: 0;
   text-align: left;
   background: none;
@@ -191,7 +226,6 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  -webkit-app-region: no-drag;
 }
 
 .bar-task-name:hover {
@@ -220,14 +254,15 @@ button {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
-  -webkit-app-region: no-drag;
 }
 
 .bar-icon-btn {
   background: none;
   border: none;
   padding: 4px;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #4b5563;
   border-radius: 4px;
 }
@@ -307,23 +342,6 @@ button {
 .task-panel-close {
   font-size: 18px;
   padding: 0 4px;
-}
-
-.task-panel-logout {
-  width: 100%;
-  flex-shrink: 0;
-  text-align: center;
-  background: none;
-  border: none;
-  border-top: 1px solid #eef0f3;
-  padding: 8px 0 2px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #9aa7b8;
-}
-
-.task-panel-logout:hover {
-  color: #c73f34;
 }
 
 .task-search {
@@ -446,12 +464,6 @@ button {
 
 .task-group-header:hover {
   background: #eef7f1;
-}
-
-.task-group-icon {
-  font-size: 13px;
-  line-height: 1;
-  flex-shrink: 0;
 }
 
 .task-group-name {

@@ -18,3 +18,6 @@ export const AUTO_PAUSE_DELAY_MS = 30_000;
 
 /** After an auto-pause actually fires, unlocking/waking only resumes the timer after this many ms - not immediately. */
 export const AUTO_RESUME_DELAY_MS = 30_000;
+
+/** Timer bar flyout height (see TimerWidget.tsx) — what the renderer requests when resizing for a long task title; main.ts clamps to its own bounds regardless. */
+export const TIMER_BAR_HEIGHT = 48;

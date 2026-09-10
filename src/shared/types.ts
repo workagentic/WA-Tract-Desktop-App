@@ -85,6 +85,13 @@ export interface TimerSnapshot {
   entry: TimeEntryRecord | null;
   /** true if the timer is currently counting (running, not paused) */
   running: boolean;
+  /**
+   * Resolved from the local task cache (or passed in directly by
+   * startTimer() at pick-time) — never from a network call. This is what
+   * lets the widget show the task name immediately instead of waiting on a
+   * tasks:list() round trip (see timer-service.ts).
+   */
+  taskTitle: string | null;
 }
 
 export interface UnresolvedTimerInfo {
@@ -116,12 +123,17 @@ export interface DesktopBridge {
   };
   timer: {
     getActive: () => Promise<TimerSnapshot>;
-    start: (taskId: string) => Promise<TimeEntryRecord>;
+    /** taskTitle is the already-known title from the picker's own click - see timer-service.ts's startTimer(). */
+    start: (taskId: string, taskTitle?: string | null) => Promise<TimeEntryRecord>;
     pause: () => Promise<TimeEntryRecord | null>;
     resume: () => Promise<TimeEntryRecord | null>;
     stop: () => Promise<TimeEntryRecord | null>;
     closeWidget: () => Promise<void>;
-    resizeWidget: (width: number) => Promise<void>;
+    resizeWidget: (width: number, height?: number) => Promise<void>;
+    /** Manual drag trio — see main.ts's startTimerBarDrag/stepTimerBarDrag/endTimerBarDrag for why this isn't -webkit-app-region: drag. */
+    dragStart: () => Promise<void>;
+    dragStep: () => Promise<void>;
+    dragEnd: () => Promise<void>;
     getUnresolved: () => Promise<UnresolvedTimerInfo | null>;
     resolveUnresolved: (action: 'resume' | 'stop') => Promise<void>;
     onTick: (cb: (snapshot: TimerSnapshot) => void) => () => void;

@@ -28,12 +28,15 @@ const bridge: DesktopBridge = {
   },
   timer: {
     getActive: () => ipcRenderer.invoke('timer:getActive'),
-    start: (taskId: string) => ipcRenderer.invoke('timer:start', taskId),
+    start: (taskId: string, taskTitle?: string | null) => ipcRenderer.invoke('timer:start', taskId, taskTitle),
     pause: () => ipcRenderer.invoke('timer:pause'),
     resume: () => ipcRenderer.invoke('timer:resume'),
     stop: () => ipcRenderer.invoke('timer:stop'),
     closeWidget: () => ipcRenderer.invoke('timer:closeWidget'),
-    resizeWidget: (width: number) => ipcRenderer.invoke('timer:resizeWidget', width),
+    resizeWidget: (width: number, height?: number) => ipcRenderer.invoke('timer:resizeWidget', width, height),
+    dragStart: () => ipcRenderer.invoke('timer:dragStart'),
+    dragStep: () => ipcRenderer.invoke('timer:dragStep'),
+    dragEnd: () => ipcRenderer.invoke('timer:dragEnd'),
     getUnresolved: () => ipcRenderer.invoke('timer:getUnresolved'),
     resolveUnresolved: (action: 'resume' | 'stop') => ipcRenderer.invoke('timer:resolveUnresolved', action),
     onTick: (cb: (snapshot: TimerSnapshot) => void) => {

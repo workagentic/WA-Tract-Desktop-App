@@ -32,7 +32,7 @@ export function PairingScreen() {
   return (
     <div className="screen">
       <div className="pairing-card">
-        <img src={waLogo} className="pairing-logo" alt="WA Track" />
+        <img src={waLogo} className="pairing-logo" alt="WA Track" draggable={false} />
         <h1 className="pairing-title">Pair this device</h1>
 
         {status.state === 'awaiting_confirmation' && (

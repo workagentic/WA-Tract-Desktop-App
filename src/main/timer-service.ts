@@ -24,6 +24,18 @@ let activeLocalId: string | null = null;
 let running = false;
 let segmentStartMs: number | null = null;
 let baseDurationSeconds = 0;
+// Resolved once, when the timer starts (or is crash-recovered), and handed
+// back verbatim in every snapshot after that — never re-resolved from a
+// network call. This is the actual fix for the "task name takes 5 seconds
+// to appear" bug: the old code left the renderer to look the title up via
+// tasks:list() (a full API round trip) on every taskId change instead of
+// using what's already known locally at select-time.
+let activeTaskTitle: string | null = null;
+
+/** Local-cache-only lookup (no network) — used when a title isn't already known (e.g. crash recovery), and as a fallback if none was passed to startTimer(). */
+function resolveTaskTitle(taskId: string): string | null {
+  return getCachedTasks().find((t) => t.id === taskId)?.title ?? null;
+}
 let heartbeatTimer: NodeJS.Timeout | null = null;
 // Scheduled on suspend/lock-screen; fires the actual auto-pause after
 // AUTO_PAUSE_DELAY_MS unless the session is restored first. Windows commonly
@@ -104,13 +116,24 @@ export function onTimerResumed(cb: TimerResumedListener): () => void {
 }
 
 export function getSnapshot(): TimerSnapshot {
-  if (!activeLocalId) return { entry: null, running: false };
+  if (!activeLocalId) return { entry: null, running: false, taskTitle: null };
   const entry = getTimeEntry(activeLocalId);
-  if (!entry) return { entry: null, running: false };
-  return { entry: { ...entry, durationSeconds: currentDurationSeconds() }, running };
+  if (!entry) return { entry: null, running: false, taskTitle: null };
+  return {
+    entry: { ...entry, durationSeconds: currentDurationSeconds() },
+    running,
+    taskTitle: activeTaskTitle,
+  };
 }
 
-export function startTimer(taskId: string): TimeEntryRecord {
+/**
+ * `taskTitle`, when provided, is the title the caller already had in hand at
+ * the moment of picking the task (TaskPicker already has the full
+ * TaskRecord it just rendered/clicked) — used as-is, with no lookup at all.
+ * Omitted only for callers that don't have it up front; falls back to a
+ * synchronous local-cache read (still no network) in that case.
+ */
+export function startTimer(taskId: string, taskTitle?: string | null): TimeEntryRecord {
   if (activeLocalId) {
     throw new Error('timer-service: a timer is already active; stop it before starting a new one');
   }
@@ -135,6 +158,7 @@ export function startTimer(taskId: string): TimeEntryRecord {
   running = true;
   segmentStartMs = Date.now();
   baseDurationSeconds = 0;
+  activeTaskTitle = taskTitle ?? resolveTaskTitle(taskId);
   startHeartbeat();
   notifyTick();
   return entry;
@@ -181,6 +205,7 @@ export function stopTimer(): TimeEntryRecord | null {
   running = false;
   segmentStartMs = null;
   baseDurationSeconds = 0;
+  activeTaskTitle = null;
   notifyTick();
   return finalEntry;
 }
@@ -206,6 +231,9 @@ export function adoptUnresolvedAsActive(entry: TimeEntryRecord): void {
   running = false;
   segmentStartMs = null;
   baseDurationSeconds = entry.durationSeconds;
+  // No pick-time title available for a crash-recovered entry - the cache is
+  // still a synchronous local read, not a network call, so this is instant.
+  activeTaskTitle = resolveTaskTitle(entry.taskId);
 }
 
 export function resolveUnresolvedTimer(action: 'resume' | 'stop'): void {

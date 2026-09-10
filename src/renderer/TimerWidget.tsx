@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TimerSnapshot } from '../shared/types';
+import { TIMER_BAR_HEIGHT } from '../shared/config';
 import waLogo from './assets/wa-logo.png';
 
 function formatDuration(totalSeconds: number): string {
@@ -10,14 +11,53 @@ function formatDuration(totalSeconds: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
+const EMPTY_SNAPSHOT: TimerSnapshot = { entry: null, running: false, taskTitle: null };
+
+/** Every real control (button) stops the mousedown here so a click never also starts a drag on the bar underneath it. */
+function stopMouseDown(e: React.MouseEvent) {
+  e.stopPropagation();
+}
+
+// Real SVG glyphs instead of the Unicode symbols (⏸ ▶ ⏹) previously used here
+// — those depend on the system font having those specific glyphs, which
+// isn't guaranteed on Windows and can silently render as nothing instead of
+// erroring. currentColor means these pick up .bar-icon-btn's own text color
+// (including its hover/stop-hover states) automatically.
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden>
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden>
+      <polygon points="6,4 20,12 6,20" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden>
+      <rect x="5" y="5" width="14" height="14" rx="1.5" />
+    </svg>
+  );
+}
+
 export function TimerWidget() {
-  const [snapshot, setSnapshot] = useState<TimerSnapshot>({ entry: null, running: false });
+  const [snapshot, setSnapshot] = useState<TimerSnapshot>(EMPTY_SNAPSHOT);
   const [displaySeconds, setDisplaySeconds] = useState(0);
-  const [taskTitle, setTaskTitle] = useState('');
   const barRef = useRef<HTMLDivElement>(null);
-  const nameSlotRef = useRef<HTMLButtonElement>(null);
+  const iconRef = useRef<HTMLSpanElement>(null);
   const nameMeasureRef = useRef<HTMLSpanElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const lastRequestedWidthRef = useRef<number | null>(null);
+  const dragRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     window.api.timer.getActive().then(setSnapshot);
@@ -25,38 +65,50 @@ export function TimerWidget() {
     return () => unsub();
   }, []);
 
+  // taskTitle comes straight off the snapshot — resolved in main (see
+  // timer-service.ts) from the picker's own click or the local task cache,
+  // never from a tasks:list() round trip. That's what makes the name appear
+  // the instant a task is picked instead of ~5s later.
+  const displayName = snapshot.taskTitle || 'No Task';
+
   // The bar's window has a fixed pixel size — a long task title would
   // otherwise get clipped/truncated by the .bar-task-name ellipsis. Instead,
   // measure how wide the full, untruncated title actually needs to be (via
-  // the offscreen .bar-task-name-measure span) and grow the window to fit,
-  // so the complete name is always visible rather than cut short.
+  // the offscreen .bar-task-name-measure span) and grow (or shrink) the
+  // window to fit exactly, so the complete name is always visible without
+  // ever leaving unused space.
+  //
+  // Deliberately NOT `bar.clientWidth - nameSlot.clientWidth` for "everything
+  // else" — clientWidth reports the window's current (possibly still-stale,
+  // e.g. still the old wider size) rendered width, not the actual space its
+  // children need, so that subtraction silently re-derives roughly the old
+  // width every time instead of shrinking. Summing each sibling's own
+  // intrinsic width plus the bar's real gap/padding (read from computed
+  // style, not hardcoded) is the only way to get the width the content
+  // *actually* needs regardless of the window's current size.
   useEffect(() => {
     const bar = barRef.current;
-    const nameSlot = nameSlotRef.current;
+    const icon = iconRef.current;
     const measure = nameMeasureRef.current;
-    if (!bar || !nameSlot || !measure) return;
+    const time = timeRef.current;
+    if (!bar || !icon || !measure || !time) return;
 
-    const nonNameWidth = bar.clientWidth - nameSlot.clientWidth;
-    const desiredWidth = Math.ceil(nonNameWidth + measure.offsetWidth + 12);
+    const barStyle = window.getComputedStyle(bar);
+    const gap = parseFloat(barStyle.columnGap || '0') || 0;
+    const paddingX = (parseFloat(barStyle.paddingLeft) || 0) + (parseFloat(barStyle.paddingRight) || 0);
+    const borderX = (parseFloat(barStyle.borderLeftWidth) || 0) + (parseFloat(barStyle.borderRightWidth) || 0);
+
+    const controlsWidth = controlsRef.current?.offsetWidth ?? 0;
+    const itemCount = 3 + (controlsRef.current ? 1 : 0); // icon, name, time, [controls]
+    const contentWidth = icon.offsetWidth + measure.offsetWidth + time.offsetWidth + controlsWidth;
+
+    const desiredWidth = Math.ceil(contentWidth + gap * (itemCount - 1) + paddingX + borderX);
 
     if (lastRequestedWidthRef.current !== desiredWidth) {
       lastRequestedWidthRef.current = desiredWidth;
-      window.api.timer.resizeWidget(desiredWidth);
+      window.api.timer.resizeWidget(desiredWidth, TIMER_BAR_HEIGHT);
     }
-  }, [taskTitle, !!snapshot.entry, snapshot.running]);
-
-  // The active entry only carries a taskId — look up its title from the
-  // cached task list so the bar can show a name instead of a raw id.
-  useEffect(() => {
-    if (!snapshot.entry) {
-      setTaskTitle('');
-      return;
-    }
-    window.api.tasks.list().then((tasks) => {
-      const match = tasks.find((t) => t.id === snapshot.entry?.taskId);
-      if (match) setTaskTitle(match.title);
-    });
-  }, [snapshot.entry?.taskId]);
+  }, [displayName, !!snapshot.entry]);
 
   // Every state transition is written synchronously to SQLite in main
   // already (see timer-service.ts); this local 1s ticker is purely cosmetic
@@ -80,47 +132,94 @@ export function TimerWidget() {
 
   async function handlePauseResume() {
     const next = snapshot.running ? await window.api.timer.pause() : await window.api.timer.resume();
-    setSnapshot({ entry: next, running: !snapshot.running && !!next });
+    setSnapshot((prev) => ({ ...prev, entry: next, running: !prev.running && !!next }));
   }
 
+  // Stop only ever changes tracking state now — it used to also call
+  // closeWidget() here, which hid the flyout entirely and was the actual
+  // cause of "the widget disappears on Stop".
   async function handleStop() {
     await window.api.timer.stop();
-    await window.api.timer.closeWidget();
   }
 
   function handleOpenPicker() {
     window.api.tasks.openPicker();
   }
 
-  const displayName = taskTitle || 'No Task';
+  // Deliberately not -webkit-app-region: drag. On Windows that's hit-tested
+  // by the OS as a title bar, which makes Windows draw its own cursor there
+  // and ignore CSS `cursor` entirely — a custom drag cursor would never
+  // actually show. Driving the drag manually (mousedown here,
+  // mousemove/mouseup on window so it keeps tracking outside the bar's own
+  // bounds) keeps this a normal DOM element, so cursor: crosshair (see
+  // styles.css) genuinely renders. rAF-throttles the IPC calls to once per
+  // frame instead of once per raw mousemove event.
+  function handleBarMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return;
+    window.api.timer.dragStart();
+
+    const onMouseMove = () => {
+      if (dragRafRef.current !== null) return;
+      dragRafRef.current = requestAnimationFrame(() => {
+        dragRafRef.current = null;
+        window.api.timer.dragStep();
+      });
+    };
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      if (dragRafRef.current !== null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      window.api.timer.dragEnd();
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
 
   return (
     <div className="widget">
-      <div className="timer-bar" ref={barRef}>
-        <span className="bar-icon" aria-hidden>
-          <img src={waLogo} alt="" />
+      {/*
+        The entire bar is draggable from anywhere on it (see handleBarMouseDown),
+        including the icon and the empty space around the name/time — only the
+        task-name button (opens the picker) and the pause/stop buttons are real
+        click targets, and each stops its own mousedown from reaching this
+        handler so clicking them never also drags the window.
+      */}
+      <div className="timer-bar" ref={barRef} onMouseDown={handleBarMouseDown}>
+        <span className="bar-icon" ref={iconRef} aria-hidden>
+          <img src={waLogo} alt="" draggable={false} />
         </span>
 
-        <button className="bar-task-name" ref={nameSlotRef} onClick={handleOpenPicker} title="Pick a task">
+        <button
+          className="bar-task-name"
+          onMouseDown={stopMouseDown}
+          onClick={handleOpenPicker}
+          title="Pick a task"
+        >
           {displayName}
         </button>
         <span className="bar-task-name-measure" ref={nameMeasureRef} aria-hidden>
           {displayName}
         </span>
 
-        {snapshot.entry && <span className="bar-time">{formatDuration(displaySeconds)}</span>}
+        <span className="bar-time" ref={timeRef}>
+          {formatDuration(displaySeconds)}
+        </span>
 
         {snapshot.entry && (
-          <div className="bar-controls">
+          <div className="bar-controls" ref={controlsRef}>
             <button
               className="bar-icon-btn"
+              onMouseDown={stopMouseDown}
               onClick={handlePauseResume}
               title={snapshot.running ? 'Pause' : 'Resume'}
             >
-              {snapshot.running ? '⏸' : '▶'}
+              {snapshot.running ? <PauseIcon /> : <PlayIcon />}
             </button>
-            <button className="bar-icon-btn bar-stop" onClick={handleStop} title="Stop">
-              ⏹
+            <button className="bar-icon-btn bar-stop" onMouseDown={stopMouseDown} onClick={handleStop} title="Stop">
+              <StopIcon />
             </button>
           </div>
         )}
