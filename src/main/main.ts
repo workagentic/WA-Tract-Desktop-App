@@ -13,6 +13,8 @@ import {
   onTimerResumed,
   getSnapshot,
   stopTimer,
+  pauseTimer,
+  hasActiveTimer,
 } from './timer-service';
 import { startSyncWorker, stopSyncWorker, runSyncCycle } from './sync-worker';
 import { createTrayIcon } from './tray-icon';
@@ -80,6 +82,11 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
 }
+
+// Set once before-quit re-triggers its own app.quit() after the final
+// pause+sync below completes, so that second call falls straight through
+// instead of preventDefault()-ing forever.
+let quitInProgress = false;
 
 let pairingWindow: BrowserWindow | null = null;
 let taskPickerWindow: BrowserWindow | null = null;
@@ -661,9 +668,36 @@ if (gotSingleInstanceLock) {
     if (process.platform === 'darwin') return;
   });
 
-  app.on('before-quit', () => {
-    stopSyncWorker();
-    unregisterIpcHandlers();
-    ipcMain.removeAllListeners();
+  app.on('before-quit', (event) => {
+    if (quitInProgress || !hasActiveTimer()) {
+      stopSyncWorker();
+      unregisterIpcHandlers();
+      ipcMain.removeAllListeners();
+      return;
+    }
+
+    // A quit while tracking is active used to leave the entry looking
+    // "open" on the server indefinitely - the backend only ever finds out
+    // via this same periodic sync, and otherwise wouldn't hear anything
+    // again until either this machine relaunches the app (crash-recovery's
+    // "resume or stop?" prompt) or the backend's own stale-heartbeat
+    // cleanup job eventually catches up with it. Pausing first persists the
+    // freshest possible duration/heartbeat (not whatever the last periodic
+    // heartbeat, up to HEARTBEAT_INTERVAL_MS old, happened to save), then
+    // one last sync attempt gives the server a chance to see that accurate
+    // state right away. Does not close the entry out (stopTimer() would) -
+    // quitting is meant to stay resumable via that same crash-recovery
+    // prompt on next launch, same as an actual crash.
+    event.preventDefault();
+    quitInProgress = true;
+    pauseTimer();
+    runSyncCycle()
+      .catch((err) => logCrash('final sync on quit', err))
+      .finally(() => {
+        stopSyncWorker();
+        unregisterIpcHandlers();
+        ipcMain.removeAllListeners();
+        app.quit();
+      });
   });
 }
