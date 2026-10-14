@@ -1,9 +1,10 @@
 import { app, ipcMain } from 'electron';
 import { apiFetch, ApiError } from './api-client';
 import { resolveApiBaseUrl } from './env';
-import { loadTokens, clearTokens } from './token-store';
+import { loadTokens } from './token-store';
+import { signOut } from './logout';
 import { decodeJwt } from './jwt';
-import { startPairing, getPairingStatus, resetPairingState } from './pairing';
+import { startPairing, getPairingStatus } from './pairing';
 import { getCachedTasks, replaceTasksCache } from './local-db';
 import {
   getSnapshot,
@@ -79,28 +80,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     return decodeJwt(tokens.accessToken);
   });
   ipcMain.handle('auth:logout', async () => {
-    // A timer left running/paused across logout would otherwise leak into
-    // the next employee's session: timer-service's activeLocalId is
-    // process-wide, not per-employee, so startTimer() for whoever logs in
-    // next would immediately throw ("a timer is already active") instead of
-    // starting their task. Stopping it here — while the outgoing employee's
-    // token is still valid — finalizes their entry with an endTime and
-    // clears activeLocalId before the next login can ever see it. The sync
-    // attempt is best-effort, same as switchToTask()'s pattern; if it fails
-    // the entry just stays 'pending' in the local cache for the background
-    // worker to retry (it will fail to attribute to whoever logs in next,
-    // since the backend rejects a mismatched employeeId, so it's safely
-    // stuck rather than misattributed).
-    if (getSnapshot().entry) {
-      stopTimer();
-      try {
-        await runSyncCycle();
-      } catch {
-        // Non-fatal — see comment above.
-      }
-    }
-    clearTokens();
-    resetPairingState();
+    await signOut();
     deps.onLogout();
   });
 

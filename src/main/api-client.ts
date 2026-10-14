@@ -36,7 +36,7 @@ function notifySessionExpired(): void {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-/** Refreshes the access token if needed. Returns false (and clears tokens) only if the refresh token itself is dead. */
+/** Refreshes the access token if needed. Returns false (and clears tokens) only if the server rejects the refresh token itself (401/403). */
 export async function ensureFreshAccessToken(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
 
@@ -50,10 +50,16 @@ export async function ensureFreshAccessToken(): Promise<boolean> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: tokens.refreshToken }),
       });
-      if (!res.ok) {
+      // Only an explicit rejection of the refresh token means the session is dead. A 5xx, 429 or a proxy
+      // error page says nothing about the token, so keep it and let the next cycle retry.
+      if (res.status === 401 || res.status === 403) {
         clearTokens();
         notifySessionExpired();
         return false;
+      }
+      if (!res.ok) {
+        console.warn(`[api-client] refresh got HTTP ${res.status}, keeping tokens for retry`);
+        return true;
       }
       const body = (await res.json()) as ApiEnvelope<{ accessToken: string; refreshToken: string }>;
       saveTokens({ accessToken: body.data.accessToken, refreshToken: body.data.refreshToken });
