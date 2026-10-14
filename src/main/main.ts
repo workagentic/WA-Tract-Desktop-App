@@ -88,6 +88,10 @@ if (!gotSingleInstanceLock) {
 // instead of preventDefault()-ing forever.
 let quitInProgress = false;
 
+// The task picker is hidden, not destroyed, when closed (Alt+F4), so it comes back instantly and the timer bar
+// takes over. Only a real quit or a logout teardown may actually close it.
+let allowPickerClose = false;
+
 let pairingWindow: BrowserWindow | null = null;
 let taskPickerWindow: BrowserWindow | null = null;
 let timerBarWindow: BrowserWindow | null = null;
@@ -284,6 +288,11 @@ function ensureTaskPickerWindow(): BrowserWindow {
     if (taskPickerLastSetPosition && x === taskPickerLastSetPosition.x && y === taskPickerLastSetPosition.y) return;
     persistFlyoutAnchor(win);
   });
+  win.on('close', (event) => {
+    if (allowPickerClose) return;
+    event.preventDefault();
+    hideTaskPicker();
+  });
   win.on('closed', () => {
     taskPickerWindow = null;
   });
@@ -419,7 +428,9 @@ function hideTaskPicker() {
 function teardownAuthenticatedWindows() {
   timerBarWindow?.close();
   timerBarWindow = null;
+  allowPickerClose = true;
   taskPickerWindow?.close();
+  allowPickerClose = false;
   taskPickerWindow = null;
 }
 
@@ -669,6 +680,7 @@ if (gotSingleInstanceLock) {
   });
 
   app.on('before-quit', (event) => {
+    allowPickerClose = true;
     if (quitInProgress || !hasActiveTimer()) {
       stopSyncWorker();
       unregisterIpcHandlers();
