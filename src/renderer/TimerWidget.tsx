@@ -141,8 +141,12 @@ export function TimerWidget() {
   }, [snapshot]);
 
   async function handlePauseResume() {
-    const next = snapshot.running ? await window.api.timer.pause() : await window.api.timer.resume();
-    setSnapshot((prev) => ({ ...prev, entry: next, running: !prev.running && !!next }));
+    if (snapshot.running) await window.api.timer.pause();
+    else await window.api.timer.resume();
+    // Re-read the real state instead of flipping `running` locally: main already pushed the new snapshot
+    // over onTick before this call returned, so flipping the already-updated state undid it and the icon
+    // only caught up on a second click.
+    setSnapshot(await window.api.timer.getActive());
   }
 
   // Stop only ever changes tracking state now — it used to also call
