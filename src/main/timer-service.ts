@@ -240,7 +240,16 @@ export function resolveUnresolvedTimer(action: 'resume' | 'stop'): void {
   const open = getOpenTimeEntry();
   if (!open) return;
   if (action === 'stop') {
-    updateTimeEntry(open.localId, { endTime: new Date().toISOString() });
+    // endTime is derived from startTime + durationSeconds (the last
+    // confirmed duration), not from "now" - the crash happened at some
+    // unknown point before this dialog was even shown, so "now" (whenever
+    // the user got around to clicking Stop) has no relationship to how long
+    // it actually tracked. durationSeconds is what's authoritative and what
+    // every report actually reads, so endTime is made to agree with it
+    // instead of the other way around - the same principle
+    // closeStaleOpenEntries() uses server-side.
+    const endTime = new Date(new Date(open.startTime).getTime() + open.durationSeconds * 1000).toISOString();
+    updateTimeEntry(open.localId, { endTime });
     notifyTick();
     return;
   }
