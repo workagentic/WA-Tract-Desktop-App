@@ -34,6 +34,39 @@ export interface IpcDeps {
  * gets direct access to ipcRenderer, Node, or Electron internals
  * (contextIsolation stays on, nodeIntegration stays off).
  */
+/**
+ * The backend caps a page at 100 and sorts newest first, so a single request silently drops the oldest
+ * tasks once a department has more than 100 - they must be paged through.
+ */
+async function fetchAllPages<T>(path: string, baseParams = new URLSearchParams()): Promise<T[]> {
+  const PAGE_SIZE = 100;
+  const all: T[] = [];
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams(baseParams);
+    params.set('limit', String(PAGE_SIZE));
+    params.set('page', String(page));
+    const res = await apiFetch<PaginatedResult<T>>(`${path}?${params.toString()}`);
+    all.push(...res.data);
+    if (res.data.length < PAGE_SIZE || all.length >= res.total) return all;
+  }
+}
+
+function cachedDescendantsOf(rootId: string): TaskRecord[] {
+  const cached = getCachedTasks();
+  const found: TaskRecord[] = [];
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    for (const t of cached) {
+      if (t.parentId === parentId) {
+        found.push(t);
+        queue.push(t.id);
+      }
+    }
+  }
+  return found;
+}
+
 export function registerIpcHandlers(deps: IpcDeps): void {
   // --- pairing -------------------------------------------------------------
   ipcMain.handle('pairing:start', async () => startPairing());
@@ -82,16 +115,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     const tokens = loadTokens();
     const departmentId = tokens?.accessToken ? decodeJwt(tokens.accessToken)?.departmentId : undefined;
     try {
-      const params = new URLSearchParams({ limit: '100' });
+      const params = new URLSearchParams();
       if (departmentId !== undefined && departmentId !== null) {
         params.set('departmentId', String(departmentId));
       }
-      const page = await apiFetch<PaginatedResult<TaskRecord>>(`/tasks?${params.toString()}`);
+      const topLevelTasks = await fetchAllPages<TaskRecord>('/tasks', params);
       // The backend's Task.id is a numeric PK — coerced to a string here so
       // it actually matches the TaskRecord.id: string contract. Without this,
       // comparing it against a TimeEntryRecord.taskId (always a string, since
       // the local SQLite column is TEXT) silently fails: number 5 !== "5".
-      const topLevel = page.data.map((t) => ({
+      const topLevel = topLevelTasks.map((t) => ({
         ...t,
         id: String(t.id),
         parentId: null,
@@ -106,13 +139,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       // is known), but that's normally only 2-3 levels deep in practice.
       const tasks: TaskRecord[] = [...topLevel];
       async function fetchChildrenOf(parent: TaskRecord): Promise<void> {
-        const childPage = await apiFetch<PaginatedResult<TaskRecord>>(`/tasks/${parent.id}/subtasks?limit=100`);
-        const children = childPage.data.map((t) => ({
-          ...t,
-          id: String(t.id),
-          parentId: parent.id,
-          client: t.client ? { ...t.client, id: String(t.client.id) } : null,
-        }));
+        let children: TaskRecord[];
+        try {
+          children = (await fetchAllPages<TaskRecord>(`/tasks/${parent.id}/subtasks`)).map((t) => ({
+            ...t,
+            id: String(t.id),
+            parentId: parent.id,
+            client: t.client ? { ...t.client, id: String(t.client.id) } : null,
+          }));
+        } catch (err) {
+          // One parent's failed children fetch must not throw away the whole fresh list (that would drop every
+          // newly created task until the next fully successful load) - keep just this branch from the cache.
+          console.warn(`[ipc] subtasks of ${parent.id} failed, using cached branch`, err instanceof ApiError ? err.status : err);
+          tasks.push(...cachedDescendantsOf(parent.id));
+          return;
+        }
         tasks.push(...children);
         await Promise.all(children.map(fetchChildrenOf));
       }
