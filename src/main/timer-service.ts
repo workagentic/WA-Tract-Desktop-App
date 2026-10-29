@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { powerMonitor } from 'electron';
-import { AUTO_PAUSE_DELAY_MS, AUTO_RESUME_DELAY_MS, HEARTBEAT_INTERVAL_MS } from '../shared/config';
+import { AUTO_PAUSE_DELAY_MS, AUTO_RESUME_DELAY_MS, HEARTBEAT_INTERVAL_MS, SLEEP_GAP_MS } from '../shared/config';
 import {
   getTimeEntry,
   getOpenTimeEntry,
@@ -52,6 +52,13 @@ let pendingResumeTimeout: NodeJS.Timeout | null = null;
 // distinguishes "auto-paused, waiting to be resumed" from a manual pause, so
 // the resume delay/notification only fires for the case it's meant for.
 let autoPausedPending = false;
+// When the session was interrupted (suspend / lock). A real suspend freezes JS,
+// so the pause timeout above never fires before sleep; on wake this is what
+// tells us how long the machine was away.
+let interruptedAtMs: number | null = null;
+// Last time the heartbeat ran (or the segment started). A heartbeat that runs
+// much later than scheduled means the machine slept without us hearing about it.
+let lastAliveMs = 0;
 
 function cancelAutoPauseResumeCycle(): void {
   if (pendingPauseTimeout) {
@@ -71,9 +78,9 @@ export function currentEmployeeId(): string | null {
   return decodeJwt(tokens.accessToken)?.sub ?? null;
 }
 
-function currentDurationSeconds(): number {
+function currentDurationSeconds(atMs: number = Date.now()): number {
   if (!running || segmentStartMs === null) return baseDurationSeconds;
-  return baseDurationSeconds + Math.floor((Date.now() - segmentStartMs) / 1000);
+  return baseDurationSeconds + Math.floor((atMs - segmentStartMs) / 1000);
 }
 
 function persistCurrentDuration(): void {
@@ -91,7 +98,18 @@ function notifyTick(): void {
 
 function startHeartbeat(): void {
   stopHeartbeat();
+  lastAliveMs = Date.now();
   heartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    const previousAliveMs = lastAliveMs;
+    lastAliveMs = now;
+    if (now - previousAliveMs > SLEEP_GAP_MS) {
+      // The machine slept and no suspend event reached us (or it came late):
+      // count only up to the last heartbeat, then resume as after any wake.
+      autoPauseAt(previousAliveMs);
+      scheduleAutoResume();
+      return;
+    }
     persistCurrentDuration();
     notifyTick();
   }, HEARTBEAT_INTERVAL_MS);
@@ -253,9 +271,36 @@ export function resolveUnresolvedTimer(action: 'resume' | 'stop'): void {
     notifyTick();
     return;
   }
+  // Adopt as paused, then resume: the user just clicked "Resume", so the timer
+  // must be running right away. The downtime since the crash is not counted -
+  // it continues from the last confirmed durationSeconds.
   adoptUnresolvedAsActive(open);
-  startHeartbeat();
+  resumeTimer();
+}
+
+/** Pauses as of `atMs` (not now), so time the machine spent asleep is not counted. */
+function autoPauseAt(atMs: number): void {
+  if (!activeLocalId || !running) return;
+  baseDurationSeconds = currentDurationSeconds(atMs);
+  running = false;
+  segmentStartMs = null;
+  persistCurrentDuration();
+  stopHeartbeat();
+  autoPausedPending = true;
   notifyTick();
+}
+
+function scheduleAutoResume(): void {
+  if (!autoPausedPending || pendingResumeTimeout) {
+    notifyTick();
+    return;
+  }
+  pendingResumeTimeout = setTimeout(() => {
+    pendingResumeTimeout = null;
+    const entry = resumeTimer(); // resets autoPausedPending via cancelAutoPauseResumeCycle; already calls notifyTick()
+    const taskId = entry?.taskId ?? null;
+    for (const cb of timerResumedListeners) cb(taskId);
+  }, AUTO_RESUME_DELAY_MS);
 }
 
 export function hasActiveTimer(): boolean {
@@ -269,6 +314,7 @@ export function hasActiveTimer(): boolean {
  */
 function handleSessionInterrupted(): void {
   if (pendingPauseTimeout || !activeLocalId || !running) return;
+  interruptedAtMs = Date.now();
   pendingPauseTimeout = setTimeout(() => {
     pendingPauseTimeout = null;
     pauseTimer(); // resets autoPausedPending via cancelAutoPauseResumeCycle - set true right after
@@ -290,18 +336,14 @@ function handleSessionRestored(): void {
   if (pendingPauseTimeout) {
     clearTimeout(pendingPauseTimeout);
     pendingPauseTimeout = null;
-    return;
+    const awayMs = Date.now() - (interruptedAtMs ?? Date.now());
+    if (awayMs < AUTO_PAUSE_DELAY_MS) return;
+    // A real suspend froze JS, so the pause timeout never got to fire even
+    // though the session was interrupted for longer than the delay. Apply the
+    // pause as of when it was interrupted, so the time asleep is not counted.
+    autoPauseAt(interruptedAtMs ?? Date.now());
   }
-  if (!autoPausedPending || pendingResumeTimeout) {
-    notifyTick();
-    return;
-  }
-  pendingResumeTimeout = setTimeout(() => {
-    pendingResumeTimeout = null;
-    const entry = resumeTimer(); // resets autoPausedPending via cancelAutoPauseResumeCycle; already calls notifyTick()
-    const taskId = entry?.taskId ?? null;
-    for (const cb of timerResumedListeners) cb(taskId);
-  }, AUTO_RESUME_DELAY_MS);
+  scheduleAutoResume();
 }
 
 /**
@@ -309,13 +351,11 @@ function handleSessionRestored(): void {
  * running timer immediately — each starts an AUTO_PAUSE_DELAY_MS countdown,
  * and only pauses if the session is still interrupted when it elapses.
  * Waking/unlocking before then cancels it with no pause/resume cycle at all.
+ * If the machine slept longer than that, JS was frozen and the countdown never
+ * fired - on wake the pause is applied retroactively (see handleSessionRestored).
  * Once an auto-pause has actually fired, waking/unlocking starts its own
  * AUTO_RESUME_DELAY_MS countdown before actually resuming + notifying —
- * note that during a REAL suspend, JS execution itself is halted, so this
- * countdown can't tick down wall-clock time while asleep; in practice it
- * fires effectively immediately alongside 'resume' once the process wakes,
- * same as the pause countdown effectively already having "used up" its
- * delay during a sleep that outlasted it.
+ * resume itself fires after AUTO_RESUME_DELAY_MS of awake time.
  */
 export function wireSystemSleepHandling(): void {
   powerMonitor.on('suspend', handleSessionInterrupted);
