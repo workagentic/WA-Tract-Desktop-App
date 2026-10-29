@@ -7,6 +7,9 @@
 /** Heartbeat cadence while a timer is running (ms). */
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 
+/** If a heartbeat runs this much later than scheduled the machine was asleep (JS is frozen then) - the gap is not tracked time. */
+export const SLEEP_GAP_MS = HEARTBEAT_INTERVAL_MS * 2;
+
 /** Debounced sync-worker cadence (ms) — spec calls for ~15-20s. */
 export const SYNC_INTERVAL_MS = 18_000;
 
